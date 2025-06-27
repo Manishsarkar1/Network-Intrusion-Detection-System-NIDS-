@@ -1,8 +1,8 @@
 import customtkinter
 import threading
 import sys, os
-sys.path.append(os.path.abspath("Snipe_the_packets"))
-from Sniffer import start_sniffing, handle_packet
+sys.path.append(os.path.abspath("./Engine"))
+from Sniffer import start_sniffing
 
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("dark-blue")
@@ -17,20 +17,26 @@ status_label.pack(pady = 10)
 textbox = customtkinter.CTkTextbox(app, width = 780, height = 400, corner_radius= 10)
 textbox.pack(pady = 20, padx = 10)
 
-
 def packet_printer(text):
     textbox.insert("end", text + "\n")
     textbox.see("end")
 
 def start_monitoring():
+    set_flag.clear()
     status_label.configure(text = "Status: Sniffing...")
-    thread = threading.Thread(target = lambda: start_sniffing(packet_printer), daemon = True)
+    thread = threading.Thread(target = lambda: start_sniffing(packet_printer, set_flag), daemon = True)
     thread.start()
+
+set_flag = threading.Event()
+
+def stop_monitoring():
+    set_flag.set()
+    status_label.configure(text = "Status: Not Sniffing")
 
 start_button = customtkinter.CTkButton(app, text = "Start Sniffing", command = start_monitoring)
 start_button.pack(pady = 10)
 
-stop_button = customtkinter.CTkButton(app, text = "Stop Sniffing", command=lambda: status_label.configure(text="Status: Not Sniffing"))
+stop_button = customtkinter.CTkButton(app, text = "Stop Sniffing", command= stop_monitoring)
 stop_button.pack(pady = 10)
 
 app.mainloop()
