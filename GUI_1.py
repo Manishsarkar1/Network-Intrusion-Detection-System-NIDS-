@@ -14,8 +14,17 @@ app.title("Network Sniffer")
 status_label = customtkinter.CTkLabel(app, text = "Status: Not Sniffing", text_color= "red", font = ('Arial', 20, 'bold'))
 status_label.pack(pady = 10)
 
-textbox = customtkinter.CTkTextbox(app, width = 780, height = 400, corner_radius= 10)
-textbox.pack(pady = 10, padx = 10)
+main_frame = customtkinter.CTkFrame(app)
+main_frame.pack(pady = 10, padx = 10, fill="both", expand=True)
+
+left_frame = customtkinter.CTkFrame(main_frame)
+left_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+right_frame = customtkinter.CTkFrame(main_frame)
+right_frame.pack(side="right", fill="Y", padx=(20, 0))
+
+textbox = customtkinter.CTkTextbox(left_frame, width = 780, height = 400)
+textbox.pack(pady = 10, padx = 10, fill="both", expand=True)
 
 def packet_printer(text):
     textbox.insert("end", text + "\n")

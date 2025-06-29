@@ -11,3 +11,6 @@ got a bit success
 Day 4:
 I didnt go to the hospital and was home all day and i managed to push my project a little further 
 and by further i mean to say how i made the UI a bit more responsive by adding the stop button, athough it was there before but the function (or in coding terms the "command") was not assigned to that button
+
+Date : 29 June 2025
+Trying to improve my NIDS further as because there is nothing that i have in this thing

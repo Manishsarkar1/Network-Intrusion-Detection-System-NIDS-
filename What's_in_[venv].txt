@@ -1,4 +1,4 @@
 customtkinter
 socket
-scapy
+scapy.all
 threads
