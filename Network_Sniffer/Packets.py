@@ -24,10 +24,17 @@ class PacketSnifferGUI(ctk.CTk):
         if IP in packet:
             src = packet[IP].src
             dst = packet[IP].dst
-            proto = packet[IP].proto
+            proto_num = packet[IP].proto
             timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-            log_msg = f"[{timestamp}] {src} -> {dst} {Protocol: {proto}}\n"
-            print(log_msg)
+            proto_map = {6: "TCP", 17: "UDP", 1: "ICMP"}
+            proto_name = proto_map.get(proto_num, str(proto_num))
+            log_msg = f"[{timestamp}]\t | \t{src}\t -> \t{dst}\t | \tProtocol: {proto_name}\n"
+            if not hasattr(self, "header_printed"):
+                header = f"{'Time':<10}\t | \t{src:18}\t | \t{dst:<18}\t | \t{proto_name:<0}\n"
+                self.packet_display.insert("end", header)
+                self.packet_display.insert("end", "-" * len(header) + "\n")
+                self.header_printed = True
+
             self.packet_display.insert("end", log_msg)
             self.packet_display.see("end")
 
@@ -52,4 +59,3 @@ class PacketSnifferGUI(ctk.CTk):
 if __name__ == "__main__":
     app = PacketSnifferGUI()
     app.mainloop()
-
