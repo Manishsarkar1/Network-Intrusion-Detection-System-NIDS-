@@ -58,4 +58,4 @@ class PacketSnifferGUI(ctk.CTk):
 
 if __name__ == "__main__":
     app = PacketSnifferGUI()
-    app.mainloop()
+    app.mainloop() 
