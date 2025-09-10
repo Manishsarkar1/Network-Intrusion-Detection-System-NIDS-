@@ -30,7 +30,7 @@ class PacketSnifferGUI(ctk.CTk):
             proto_name = proto_map.get(proto_num, str(proto_num))
             log_msg = f"[{timestamp}]\t | \t{src}\t -> \t{dst}\t | \tProtocol: {proto_name}\n"
             if not hasattr(self, "header_printed"):
-                header = f"{'Time':<10}\t | \t{src:18}\t | \t{dst:<18}\t | \t{proto_name:<0}\n"
+                header = f"{'Time':<10}\t | \tSource (src)\t | \tDestination (DST)\t | \tProtocol\n"
                 self.packet_display.insert("end", header)
                 self.packet_display.insert("end", "-" * len(header) + "\n")
                 self.header_printed = True
