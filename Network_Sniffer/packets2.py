@@ -121,7 +121,7 @@ class SnifferWindow(ctk.CTkToplevel):
         header_frame.grid_columnconfigure(1, weight=1)
         
         # Status indicator
-        self.status_indicator = ctk.CTkLabel(header_frame, text="●", font=("Consolas", 24), 
+        self.status_indicator = ctk.CTkLabel(header_frame, text="●", font=("Consolas", 30), 
                                             text_color="gray")
         self.status_indicator.grid(row=0, column=0, padx=(0, 10))
         
@@ -329,8 +329,13 @@ class InterfaceSelector(ctk.CTk):
                     font=("Segoe UI", 11), text_color="gray").pack()
 
     def open_sniffer_window(self, iface, name):
+    # Create the sniffer window
         window = SnifferWindow(iface, name)
-        window.focus()
+    
+    # Keep the interface selector in background
+        window.transient(self)      # Associate with main window
+        window.lift()               # Bring new window to front once
+    # Do NOT call window.focus() – this prevents stealing focus repeatedly
 
 # ---------------- Main ----------------
 def main():
