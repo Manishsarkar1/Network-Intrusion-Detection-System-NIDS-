@@ -15,98 +15,77 @@ ctk.set_default_color_theme("blue")
 def detect_os():
     return platform.system()
 
-# ---------------- Interface Mapper ----------------
 def get_interfaces_for_os(os_name):
     interfaces = {}
+
     if os_name == "Windows":
-        from scapy.arch.windows import get_windows_if_list
-        
-        # Get detailed Windows interface list from Scapy
         try:
+            from scapy.arch.windows import get_windows_if_list
+            import psutil
+
             windows_ifaces = get_windows_if_list()
-            print(f"\nScanning {len(windows_ifaces)} interfaces...")
-            
-            # Get active interfaces from psutil
             psutil_stats = psutil.net_if_stats()
-            active_interfaces = {name: stats for name, stats in psutil_stats.items() if stats.isup}
             
-            # Keywords to exclude (virtual/dummy adapters)
             exclude_keywords = [
                 'pseudo', 'loopback', 'miniport', 'wan miniport', 
                 'microsoft kernel debug', 'root enumerator',
-                'teredo', 'isatap', '6to4', 'virtual'
+                'teredo', 'isatap', '6to4', 'vpn', 'virtual'
             ]
             
             for iface in windows_ifaces:
-                # Extract information
-                name = iface.get('name', 'Unknown')
+                name = iface.get('name', '')
                 description = iface.get('description', '')
                 guid = iface.get('guid', '')
+                full_scapy_name = iface.get('guid', '')  # GUID alone will not work; need full NPF string
                 ip = iface.get('ip', '')
-                mac = iface.get('mac', '')
-                
-                # Skip if no valid identifier
-                if not guid and not name:
-                    continue
-                
-                # Use description as display name (most readable)
-                if description:
-                    display_name = description
-                elif name:
-                    display_name = name
-                else:
-                    display_name = f"Interface {guid[:8]}"
-                
-                # Skip if it matches exclusion keywords
+
+                # Construct the full Scapy interface string
+                scapy_iface = iface.get('name', '')  # 'name' in get_windows_if_list() is usually like \Device\NPF_{GUID}
+
+                # Friendly display name
+                display_name = description if description else name
                 display_lower = display_name.lower()
+                
+                # Skip unwanted adapters
                 if any(keyword in display_lower for keyword in exclude_keywords):
                     continue
                 
-                # Check if interface is up/active
-                is_active = False
-                for active_name in active_interfaces.keys():
-                    if guid in active_name or name in active_name or description in active_name:
-                        is_active = True
+                # Skip if interface is down
+                is_up = False
+                for key in psutil_stats:
+                    if guid in key or name in key or description in key:
+                        if psutil_stats[key].isup:
+                            is_up = True
                         break
-                
-                # Include if active (regardless of IP/MAC)
-                if is_active:
-                    # Add IP info to name if available
-                    if ip and ip != '0.0.0.0':
-                        display_name = f"{display_name} ({ip})"
-                    
-                    # The actual interface identifier for Scapy
-                    scapy_iface = guid if guid else name
-                    
-                    # Avoid duplicates
-                    if display_name not in interfaces:
-                        print(f"  ✓ {display_name}")
-                        interfaces[display_name] = scapy_iface
-                
-        except Exception as e:
-            print(f"Error getting Windows interfaces: {e}")
-            # Fallback to basic Scapy interface list
+                if not is_up:
+                    continue
+
+                # Append IP if valid
+                if ip and ip != '0.0.0.0':
+                    display_name = f"{display_name} ({ip})"
+
+                # Store in dictionary: friendly name → Scapy interface string
+                interfaces[display_name] = scapy_iface
+
+        except Exception:
+            from scapy.all import get_if_list
             scapy_ifaces = get_if_list()
-            print(f"Fallback: Using basic interface list ({len(scapy_ifaces)} found)")
-            
             for scapy_iface in scapy_ifaces:
-                # Try to clean up the name
                 display_name = scapy_iface
                 if '\\' in display_name:
                     display_name = display_name.split('\\')[-1]
                 display_name = display_name.replace('NPF_', '').replace('{', '').replace('}', '')
-                
                 interfaces[display_name] = scapy_iface
-        
-        print(f"\nFound {len(interfaces)} active interfaces\n")
-                
-    else:  # Linux / macOS
+
+    else:
+        # Linux / macOS
+        from scapy.all import get_if_list
         scapy_ifaces = get_if_list()
         for iface in scapy_ifaces:
             interfaces[iface] = iface
-    
-    return interfaces
 
+    return interfaces
+    
 # ---------------- Packet Monitor Window ----------------
 class SnifferWindow(ctk.CTkToplevel):
     def __init__(self, iface, name):
@@ -170,7 +149,7 @@ class SnifferWindow(ctk.CTkToplevel):
         self.packet_display.tag_config("UDP", foreground="#2196F3")
         self.packet_display.tag_config("ICMP", foreground="#FF9800")
         self.packet_display.tag_config("OTHER", foreground="#9E9E9E")
-        self.packet_display.tag_config("HEADER", foreground="#FFFFFF", font=("Consolas", 11, "bold"))
+        self.packet_display.tag_config("HEADER", foreground="#FFFFFF")
         self.packet_display.tag_config("TIME", foreground="#64B5F6")
         self.packet_display.tag_config("IP", foreground="#FFD54F")
 
