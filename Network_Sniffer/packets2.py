@@ -36,16 +36,12 @@ def get_interfaces_for_os(os_name):
                 name = iface.get('name', '')
                 description = iface.get('description', '')
                 guid = iface.get('guid', '')
-                full_scapy_name = iface.get('guid', '')  # GUID alone will not work; need full NPF string
+                scapy_iface = name  # full string like \Device\NPF_{GUID}
                 ip = iface.get('ip', '')
 
-                # Construct the full Scapy interface string
-                scapy_iface = iface.get('name', '')  # 'name' in get_windows_if_list() is usually like \Device\NPF_{GUID}
-
-                # Friendly display name
                 display_name = description if description else name
                 display_lower = display_name.lower()
-                
+
                 # Skip unwanted adapters
                 if any(keyword in display_lower for keyword in exclude_keywords):
                     continue
@@ -60,11 +56,23 @@ def get_interfaces_for_os(os_name):
                 if not is_up:
                     continue
 
+                # Determine adapter type for brackets
+                adapter_type = ""
+                if "wi-fi" in display_lower or "wlan" in display_lower:
+                    adapter_type = "Wi-Fi"
+                elif "ethernet" in display_lower or "lan" in display_lower:
+                    adapter_type = "Ethernet"
+                elif "bridge" in display_lower:
+                    adapter_type = "Bridge"
+                # else leave empty, but you can add more rules if needed
+
+                if adapter_type:
+                    display_name = f"{display_name} ({adapter_type})"
+
                 # Append IP if valid
                 if ip and ip != '0.0.0.0':
                     display_name = f"{display_name} ({ip})"
 
-                # Store in dictionary: friendly name → Scapy interface string
                 interfaces[display_name] = scapy_iface
 
         except Exception:
@@ -85,7 +93,7 @@ def get_interfaces_for_os(os_name):
             interfaces[iface] = iface
 
     return interfaces
-    
+
 # ---------------- Packet Monitor Window ----------------
 class SnifferWindow(ctk.CTkToplevel):
     def __init__(self, iface, name):
