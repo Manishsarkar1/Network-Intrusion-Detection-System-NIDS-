@@ -11,7 +11,6 @@ import datetime
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# ---------------- OS Detector ----------------
 def detect_os():
     return platform.system()
 
@@ -337,7 +336,6 @@ class InterfaceSelector(ctk.CTk):
         window.lift()               # Bring new window to front once
     # Do NOT call window.focus() – this prevents stealing focus repeatedly
 
-# ---------------- Main ----------------
 def main():
     os_name = detect_os()
     interfaces = get_interfaces_for_os(os_name)
