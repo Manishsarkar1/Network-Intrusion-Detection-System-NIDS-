@@ -146,7 +146,7 @@ class SnifferWindow(ctk.CTkToplevel):
         
         # Packet display with custom colors
         self.packet_display = ctk.CTkTextbox(display_frame, width=920, height=450, 
-                                            font=("Consolas", 11), 
+                                            font=("Consolas", 16), 
                                             fg_color=("#1a1a1a", "#0a0a0a"),
                                             corner_radius=8)
         self.packet_display.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
