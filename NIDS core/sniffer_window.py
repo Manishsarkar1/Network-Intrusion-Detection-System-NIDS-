@@ -232,6 +232,10 @@ class SnifferWindow(ctk.CTkToplevel):
         alerts_window.title("Alert History")
         alerts_window.geometry("900x600")
         
+        # FIXED: Prevent focus stealing
+        alerts_window.transient(self)  # Make it a child of this window
+        # Don't call focus() or lift() to prevent stealing focus
+        
         # Header
         header_frame = ctk.CTkFrame(alerts_window, fg_color="transparent")
         header_frame.pack(fill="x", padx=20, pady=20)
@@ -262,3 +266,6 @@ class SnifferWindow(ctk.CTkToplevel):
                 alerts_text.insert("end", line)
         
         alerts_text.configure(state="disabled")
+        
+        # Keep the main monitoring window focused
+        self.after(100, lambda: self.focus())
