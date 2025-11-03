@@ -93,7 +93,7 @@ class SnifferWindow(ctk.CTkToplevel):
         self.packet_display.tag_config("HEADER", foreground="#FFFFFF")
         self.packet_display.tag_config("TIME", foreground="#64B5F6")
         self.packet_display.tag_config("IP", foreground="#FFD54F")
-        self.packet_display.tag_config("ALERT", foreground="#FF5252", font=("Consolas", 10, "bold"))
+        self.packet_display.tag_config("ALERT", foreground="#FF5252")
 
         # Control panel
         control_frame = ctk.CTkFrame(self, fg_color="transparent")
