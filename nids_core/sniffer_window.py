@@ -257,6 +257,168 @@ class SnifferWindow(ctk.CTkToplevel):
         delay_ms = 10 if processed >= max_events else 50
         self.after(delay_ms, self._process_ui_queue)
 
+    def _summarize_packet(self, pkt):
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        length = len(pkt)
+
+        if pkt.haslayer(IP):
+            src = pkt[IP].src
+            dst = pkt[IP].dst
+            if pkt.haslayer(TCP):
+                proto = "TCP"
+                info = f"{pkt[TCP].sport}->{pkt[TCP].dport} flags={pkt[TCP].sprintf('%flags%')}"
+            elif pkt.haslayer(UDP):
+                proto = "UDP"
+                info = f"{pkt[UDP].sport}->{pkt[UDP].dport}"
+            elif pkt.haslayer(ICMP):
+                proto = "ICMP"
+                info = f"type={pkt[ICMP].type} code={pkt[ICMP].code}"
+            else:
+                proto = "OTHER"
+                info = "IP frame"
+        elif pkt.haslayer(ARP):
+            proto = "ARP"
+            src = getattr(pkt[ARP], "psrc", "-")
+            dst = getattr(pkt[ARP], "pdst", "-")
+            info = "ARP reply" if pkt[ARP].op == 2 else "ARP request"
+        else:
+            proto = "OTHER"
+            src = "-"
+            dst = "-"
+            info = pkt.summary()
+
+        return {
+            "time": now,
+            "source": src,
+            "destination": dst,
+            "protocol": proto,
+            "length": str(length),
+            "info": info,
+        }
+
+    def _format_hex(self, pkt):
+        raw = bytes(pkt)
+        lines = []
+        for i in range(0, len(raw), 16):
+            chunk = raw[i : i + 16]
+            hex_part = " ".join(f"{b:02x}" for b in chunk)
+            ascii_part = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
+            lines.append(f"{i:04x}  {hex_part:<47}  {ascii_part}")
+        return "\n".join(lines)
+
+    def _passes_filters(self, record):
+        s = record["summary"]
+        proto = s["protocol"]
+        pvar = self.proto_vars.get(proto)
+        if pvar and not pvar.get():
+            return False
+
+        query = self.search_var.get().strip().lower()
+        if query:
+            combined = " ".join([s["source"], s["destination"], s["protocol"], s["info"]]).lower()
+            if query not in combined:
+                return False
+        return True
+
+    def _max_view_count(self):
+        try:
+            return max(100, min(int(self.max_view_var.get().strip()), 5000))
+        except Exception:
+            return 700
+
+    def _active_records(self):
+        visible = [r for r in self.packet_records if self._passes_filters(r)]
+        return visible[-self._max_view_count() :]
+
+    def _clear_rail_widgets(self):
+        for widget in self.rail.winfo_children():
+            widget.destroy()
+
+    def _scroll_rail_to_end(self):
+        try:
+            canvas = getattr(self.rail, "_parent_canvas", None)
+            if canvas is not None:
+                canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def _build_card(self, parent, record):
+        s = record["summary"]
+        proto = s["protocol"]
+        color = PROTO_COLORS.get(proto, "#B0BEC5")
+        is_selected = self.selected_no == record["no"]
+
+        card = ctk.CTkFrame(
+            parent,
+            corner_radius=8,
+            fg_color=("#172036", "#172036") if not is_selected else ("#1f2a44", "#1f2a44"),
+        )
+        card.pack(fill="x", padx=4, pady=4)
+
+        ctk.CTkFrame(card, width=6, fg_color=color, corner_radius=6).pack(side="left", fill="y", padx=(0, 8), pady=0)
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=6)
+
+        title = f"#{record['no']}  {s['time']}  [{proto}]  {s['source']} -> {s['destination']}"
+        ctk.CTkLabel(body, text=title, anchor="w", font=("Consolas", 12, "bold"), text_color="#e2e8f0").pack(fill="x")
+        ctk.CTkLabel(body, text=f"len {s['length']} | {s['info']}", anchor="w", text_color="#94a3b8").pack(fill="x")
+
+        ctk.CTkButton(
+            card,
+            text="Inspect",
+            width=80,
+            fg_color=("#334155", "#334155"),
+            hover_color=("#475569", "#475569"),
+            command=lambda n=record["no"]: self._select_record(n),
+        ).pack(side="right", padx=8, pady=8)
+
+    def _rebuild_event_rail(self):
+        self._clear_rail_widgets()
+        for record in self._active_records():
+            self._build_card(self.rail, record)
+
+        if self.auto_scroll_var.get():
+            self._scroll_rail_to_end()
+
+    def _select_record(self, no):
+        self.selected_no = no
+        self._rebuild_event_rail()
+        self._render_selected()
+
+    def _find_record(self, no):
+        for rec in self.packet_records:
+            if rec["no"] == no:
+                return rec
+        return None
+
+    def _render_selected(self):
+        self.inspect_text.delete("1.0", "end")
+        if self.selected_no is None:
+            self.inspect_text.insert("end", "Select a packet from the traffic rail.")
+            return
+
+        rec = self._find_record(self.selected_no)
+        if not rec:
+            self.inspect_text.insert("end", "Selection not found.")
+            return
+
+        pkt = rec["packet"]
+        if pkt is None:
+            s = rec["summary"]
+            self.inspect_text.insert(
+                "end",
+                f"ALERT\nTime: {s['time']}\nSource: {s['source']}\nDestination: {s['destination']}\n\n{s['info']}",
+            )
+            return
+
+        try:
+            if self.inspect_mode.get() == "details":
+                self.inspect_text.insert("end", pkt.show(dump=True))
+            else:
+                self.inspect_text.insert("end", self._format_hex(pkt))
+        except Exception as e:
+            self.inspect_text.insert("end", f"Failed to render packet: {e}")
     def _append_visible_record(self, record):
         if not self._passes_filters(record):
             return
