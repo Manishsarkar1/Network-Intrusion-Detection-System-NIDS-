@@ -10,9 +10,6 @@ from nids_core.config import SSH_PORT, VNC_PORTS
 from nids_core.settings import default_settings, validate_settings
 
 
-def proto_name(num):
-    return {6: "TCP", 17: "UDP", 1: "ICMP"}.get(num, "OTHER")
-
 
 class Detector:
     def __init__(self, logger=None, gui_callback=None, settings=None):
@@ -93,12 +90,6 @@ class Detector:
         ip = pkt.getlayer(IP)
         src = ip.src
         dst = ip.dst
-        pnum = ip.proto
-        pname = proto_name(pnum)
-
-        if self.gui_callback:
-            tstr = time.strftime("%H:%M:%S", time.localtime(ts))
-            self.gui_callback((tstr, src, dst, pname))
 
         if pkt.haslayer(TCP):
             tcp = pkt.getlayer(TCP)

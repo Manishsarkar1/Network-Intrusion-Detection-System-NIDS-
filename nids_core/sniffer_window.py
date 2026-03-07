@@ -1,12 +1,15 @@
 # sniffer_window.py
 import datetime
+import queue
 import threading
 import time
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
-from scapy.all import sniff
+from scapy.all import sniff, wrpcap
+from scapy.layers.inet import ICMP, IP, TCP, UDP
+from scapy.layers.l2 import ARP
 
 from nids_core.detector import Detector
 from nids_core.logger import Logger
@@ -15,13 +18,18 @@ from nids_core.settings import default_settings, load_settings, save_settings, v
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-FILTER_PRESETS = {
-    "All Traffic": None,
+CAPTURE_PRESETS = {
+    "None": "",
+    "HTTP/HTTPS": "tcp port 80 or tcp port 443",
+    "DNS": "udp port 53 or tcp port 53",
+    "SSH": "tcp port 22",
+    "ICMP": "icmp",
+    "ARP": "arp",
     "TCP Only": "tcp",
     "UDP Only": "udp",
-    "ICMP Only": "icmp",
-    "ARP Only": "arp",
 }
+
+DISPLAY_PROTOCOLS = ["TCP", "UDP", "ICMP", "ARP", "OTHER", "ALERT"]
 
 SETTING_FIELDS = [
     ("syn_window", "SYN Window (sec)", float),
@@ -42,204 +50,171 @@ class SnifferWindow(ctk.CTkToplevel):
         super().__init__()
         self.iface = iface
         self.name = name
-        self.title(f"Monitoring - {name}")
-        self.geometry("1200x760")
+        self.title(f"Packet Analyzer - {name}")
+        self.geometry("1400x860")
+
         self.sniffing = False
-        self.header_printed = False
+        self.paused = False
         self.packet_count = 0
         self.alert_count = 0
         self._packet_count_last_tick = 0
         self.start_time = None
         self.sniff_thread = None
+
+        self.packet_queue = queue.Queue()
+        self.packet_records = []
+        self.packet_counter = 0
         self.settings_window = None
         self.settings_vars = {}
         self.settings_status = None
 
         self.detection_settings = load_settings()
-
-        # Initialize IDS components
         self.logger = Logger()
         self.detector = Detector(
             logger=self.logger,
-            gui_callback=self.display_packet_or_alert,
+            gui_callback=self._enqueue_detector_event,
             settings=self.detection_settings,
         )
         self.detector.start()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Configure grid
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self._build_ui()
+        self._tick_metrics()
+        self._process_ui_queue()
 
-        # Header Frame
+    def _build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(4, weight=1)
+
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        header_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
         header_frame.grid_columnconfigure(1, weight=1)
 
-        # Status indicator
         self.status_indicator = ctk.CTkLabel(header_frame, text="o", font=("Consolas", 30), text_color="gray")
         self.status_indicator.grid(row=0, column=0, padx=(0, 10))
 
-        # Title and interface info
         title_container = ctk.CTkFrame(header_frame, fg_color="transparent")
         title_container.grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(title_container, text="NIDS Packet Analyzer", font=("Segoe UI", 22, "bold")).pack(anchor="w")
+        ctk.CTkLabel(title_container, text=f"Interface: {self.name}", text_color="gray").pack(anchor="w")
 
-        ctk.CTkLabel(title_container, text="Network Intrusion Detection System", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-        ctk.CTkLabel(
-            title_container,
-            text=f"Interface: {name} | IDS: ACTIVE",
-            font=("Segoe UI", 12),
-            text_color="#4CAF50",
-        ).pack(anchor="w")
-
-        # Counters container
-        counters_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
-        counters_frame.grid(row=0, column=2, padx=20)
-
-        self.counter_label = ctk.CTkLabel(counters_frame, text="Packets: 0", font=("Segoe UI", 13, "bold"))
+        stats_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        stats_frame.grid(row=0, column=2, padx=(10, 0))
+        self.counter_label = ctk.CTkLabel(stats_frame, text="Packets: 0", font=("Segoe UI", 13, "bold"))
         self.counter_label.pack(anchor="e")
-
-        self.alert_label = ctk.CTkLabel(
-            counters_frame,
-            text="Alerts: 0",
-            font=("Segoe UI", 13, "bold"),
-            text_color="#FF5252",
-        )
+        self.alert_label = ctk.CTkLabel(stats_frame, text="Alerts: 0", text_color="#FF5252", font=("Segoe UI", 13, "bold"))
         self.alert_label.pack(anchor="e")
-
-        self.rate_label = ctk.CTkLabel(counters_frame, text="Rate: 0 pkt/s", font=("Segoe UI", 12))
+        self.rate_label = ctk.CTkLabel(stats_frame, text="Rate: 0 pkt/s")
         self.rate_label.pack(anchor="e")
-
-        self.uptime_label = ctk.CTkLabel(counters_frame, text="Uptime: 00:00:00", font=("Segoe UI", 12))
+        self.uptime_label = ctk.CTkLabel(stats_frame, text="Uptime: 00:00:00")
         self.uptime_label.pack(anchor="e")
 
-        # Controls row
-        options_frame = ctk.CTkFrame(self, corner_radius=8)
-        options_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
-        options_frame.grid_columnconfigure(2, weight=1)
+        controls = ctk.CTkFrame(self)
+        controls.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+        for i in range(7):
+            controls.grid_columnconfigure(i, weight=1)
 
-        ctk.CTkLabel(options_frame, text="Capture Filter", font=("Segoe UI", 12, "bold")).grid(
-            row=0, column=0, padx=(12, 8), pady=10, sticky="w"
+        self.start_button = ctk.CTkButton(controls, text="Start", command=self.start_sniffing)
+        self.start_button.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
+        self.pause_button = ctk.CTkButton(controls, text="Pause", command=self.toggle_pause, state="disabled")
+        self.pause_button.grid(row=0, column=1, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(controls, text="Clear", command=self.clear_packets).grid(row=0, column=2, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(controls, text="Save PCAP", command=self.save_pcap).grid(row=0, column=3, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(controls, text="Export Alerts CSV", command=self.export_alerts).grid(row=0, column=4, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(controls, text="Detection Settings", command=self.open_settings_window).grid(row=0, column=5, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(controls, text="Alerts History", command=self.show_alerts_history).grid(row=0, column=6, padx=6, pady=6, sticky="ew")
+
+        filter_bar = ctk.CTkFrame(self)
+        filter_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
+        for i in range(9):
+            filter_bar.grid_columnconfigure(i, weight=1 if i in (3, 6) else 0)
+
+        ctk.CTkLabel(filter_bar, text="Capture (BPF):").grid(row=0, column=0, padx=(10, 4), pady=8, sticky="w")
+        self.bpf_entry = ctk.CTkEntry(filter_bar, placeholder_text="tcp port 443 and host 192.168.1.10")
+        self.bpf_entry.grid(row=0, column=1, columnspan=3, padx=4, pady=8, sticky="ew")
+
+        self.capture_preset_var = ctk.StringVar(value="None")
+        preset = ctk.CTkOptionMenu(filter_bar, variable=self.capture_preset_var, values=list(CAPTURE_PRESETS.keys()), command=self._apply_capture_preset)
+        preset.grid(row=0, column=4, padx=4, pady=8, sticky="ew")
+
+        ctk.CTkLabel(filter_bar, text="Search:").grid(row=0, column=5, padx=(8, 4), pady=8, sticky="w")
+        self.search_var = ctk.StringVar(value="")
+        self.search_var.trace_add("write", lambda *_: self._rebuild_tree())
+        self.search_entry = ctk.CTkEntry(filter_bar, textvariable=self.search_var, placeholder_text="src/dst/proto/info")
+        self.search_entry.grid(row=0, column=6, padx=4, pady=8, sticky="ew")
+
+        self.auto_scroll_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(filter_bar, text="Auto Scroll", variable=self.auto_scroll_var, width=120).grid(
+            row=0, column=7, padx=6, pady=8, sticky="w"
         )
 
-        self.filter_var = ctk.StringVar(value="All Traffic")
-        self.filter_menu = ctk.CTkOptionMenu(options_frame, variable=self.filter_var, values=list(FILTER_PRESETS.keys()))
-        self.filter_menu.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="w")
+        max_frame = ctk.CTkFrame(filter_bar, fg_color="transparent")
+        max_frame.grid(row=0, column=8, padx=6, pady=8, sticky="e")
+        ctk.CTkLabel(max_frame, text="Max View:").pack(side="left", padx=(0, 4))
+        self.max_view_var = ctk.StringVar(value="5000")
+        max_entry = ctk.CTkEntry(max_frame, textvariable=self.max_view_var, width=70)
+        max_entry.pack(side="left")
+        self.max_view_var.trace_add("write", lambda *_: self._rebuild_tree())
 
-        self.filter_help = ctk.CTkLabel(
-            options_frame,
-            text="Tip: Choose a filter before starting capture.",
-            font=("Segoe UI", 11),
-            text_color="gray",
-        )
-        self.filter_help.grid(row=0, column=2, padx=(0, 12), pady=10, sticky="w")
+        proto_bar = ctk.CTkFrame(self)
+        proto_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self.proto_vars = {}
+        for idx, proto in enumerate(DISPLAY_PROTOCOLS):
+            var = ctk.BooleanVar(value=True)
+            self.proto_vars[proto] = var
+            ctk.CTkCheckBox(proto_bar, text=proto, variable=var, command=self._rebuild_tree).grid(
+                row=0, column=idx, padx=10, pady=6, sticky="w"
+            )
 
-        self.settings_button = ctk.CTkButton(
-            options_frame,
-            text="Detection Settings",
-            command=self.open_settings_window,
-            width=170,
-            fg_color=("#5D4037", "#4E342E"),
-            hover_color=("#6D4C41", "#5D4037"),
-        )
-        self.settings_button.grid(row=0, column=3, padx=(0, 10), pady=10, sticky="e")
+        content = ctk.CTkFrame(self)
+        content.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 12))
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(0, weight=3)
+        content.grid_rowconfigure(1, weight=2)
 
-        # Main packet display frame
-        display_frame = ctk.CTkFrame(self, corner_radius=10)
-        display_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
-        display_frame.grid_columnconfigure(0, weight=1)
-        display_frame.grid_rowconfigure(0, weight=1)
+        tree_container = ctk.CTkFrame(content)
+        tree_container.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
 
-        self.packet_display = ctk.CTkTextbox(
-            display_frame,
-            width=1120,
-            height=500,
-            font=("Consolas", 10),
-            fg_color=("#1a1a1a", "#0a0a0a"),
-            corner_radius=8,
-        )
-        self.packet_display.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+        columns = ("no", "time", "source", "destination", "protocol", "length", "info")
+        self.packet_tree = ttk.Treeview(tree_container, columns=columns, show="headings")
+        self.packet_tree.grid(row=0, column=0, sticky="nsew")
 
-        # Configure text tags for colored output
-        self.packet_display.tag_config("TCP", foreground="#4CAF50")
-        self.packet_display.tag_config("UDP", foreground="#2196F3")
-        self.packet_display.tag_config("ICMP", foreground="#FF9800")
-        self.packet_display.tag_config("OTHER", foreground="#9E9E9E")
-        self.packet_display.tag_config("SSH", foreground="#9C27B0")
-        self.packet_display.tag_config("VNC", foreground="#E91E63")
-        self.packet_display.tag_config("ARP", foreground="#FF5722")
-        self.packet_display.tag_config("HEADER", foreground="#FFFFFF")
-        self.packet_display.tag_config("TIME", foreground="#64B5F6")
-        self.packet_display.tag_config("IP", foreground="#FFD54F")
-        self.packet_display.tag_config("ALERT", foreground="#FF5252")
-        self.packet_display.tag_config("INFO", foreground="#90CAF9")
+        widths = {"no": 60, "time": 90, "source": 170, "destination": 170, "protocol": 90, "length": 80, "info": 620}
+        headings = {"no": "No.", "time": "Time", "source": "Source", "destination": "Destination", "protocol": "Protocol", "length": "Length", "info": "Info"}
+        for col in columns:
+            self.packet_tree.heading(col, text=headings[col])
+            self.packet_tree.column(col, width=widths[col], anchor="w")
 
-        # Control panel
-        control_frame = ctk.CTkFrame(self, fg_color="transparent")
-        control_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
-        for idx in range(4):
-            control_frame.grid_columnconfigure(idx, weight=1)
+        self.packet_tree.tag_configure("ALERT", foreground="#FF5252")
 
-        self.start_button = ctk.CTkButton(
-            control_frame,
-            text="Start Monitoring",
-            command=self.start_sniffing,
-            height=40,
-            font=("Segoe UI", 14, "bold"),
-            fg_color=("#2E7D32", "#1B5E20"),
-            hover_color=("#388E3C", "#2E7D32"),
-            corner_radius=8,
-        )
-        self.start_button.grid(row=0, column=0, padx=10, sticky="ew")
+        y_scroll = ttk.Scrollbar(tree_container, orient="vertical", command=self.packet_tree.yview)
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        self.packet_tree.configure(yscrollcommand=y_scroll.set)
 
-        self.clear_button = ctk.CTkButton(
-            control_frame,
-            text="Clear Display",
-            command=self.clear_display,
-            height=40,
-            font=("Segoe UI", 14),
-            fg_color=("#424242", "#303030"),
-            hover_color=("#616161", "#424242"),
-            corner_radius=8,
-        )
-        self.clear_button.grid(row=0, column=1, padx=10, sticky="ew")
+        x_scroll = ttk.Scrollbar(tree_container, orient="horizontal", command=self.packet_tree.xview)
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        self.packet_tree.configure(xscrollcommand=x_scroll.set)
 
-        self.alerts_button = ctk.CTkButton(
-            control_frame,
-            text="View Alerts History",
-            command=self.show_alerts_history,
-            height=40,
-            font=("Segoe UI", 14),
-            fg_color=("#D32F2F", "#B71C1C"),
-            hover_color=("#F44336", "#D32F2F"),
-            corner_radius=8,
-        )
-        self.alerts_button.grid(row=0, column=2, padx=10, sticky="ew")
+        self.packet_tree.bind("<<TreeviewSelect>>", self._on_packet_select)
 
-        self.export_button = ctk.CTkButton(
-            control_frame,
-            text="Export Alerts CSV",
-            command=self.export_alerts,
-            height=40,
-            font=("Segoe UI", 14),
-            fg_color=("#1565C0", "#0D47A1"),
-            hover_color=("#1976D2", "#1565C0"),
-            corner_radius=8,
-        )
-        self.export_button.grid(row=0, column=3, padx=10, sticky="ew")
+        bottom = ctk.CTkFrame(content)
+        bottom.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        bottom.grid_columnconfigure(0, weight=1)
+        bottom.grid_columnconfigure(1, weight=1)
+        bottom.grid_rowconfigure(0, weight=1)
 
-        self._tick_metrics()
+        self.detail_text = ctk.CTkTextbox(bottom, font=("Consolas", 11))
+        self.detail_text.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
 
-    def clear_display(self):
-        self.packet_display.delete("1.0", "end")
-        self.header_printed = False
-        self.packet_count = 0
-        self.alert_count = 0
-        self._packet_count_last_tick = 0
-        self.counter_label.configure(text="Packets: 0")
-        self.alert_label.configure(text="Alerts: 0")
-        self.rate_label.configure(text="Rate: 0 pkt/s")
+        self.raw_text = ctk.CTkTextbox(bottom, font=("Consolas", 11))
+        self.raw_text.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
+
+    def _apply_capture_preset(self, label):
+        self.bpf_entry.delete(0, "end")
+        self.bpf_entry.insert(0, CAPTURE_PRESETS.get(label, ""))
 
     def _tick_metrics(self):
         if self.start_time:
@@ -249,120 +224,194 @@ class SnifferWindow(ctk.CTkToplevel):
             s = elapsed % 60
             self.uptime_label.configure(text=f"Uptime: {h:02}:{m:02}:{s:02}")
 
-        current = self.packet_count
-        rate = max(0, current - self._packet_count_last_tick)
-        self._packet_count_last_tick = current
+        rate = max(0, self.packet_count - self._packet_count_last_tick)
+        self._packet_count_last_tick = self.packet_count
         self.rate_label.configure(text=f"Rate: {rate} pkt/s")
-
         self.after(1000, self._tick_metrics)
 
-    def _selected_bpf_filter(self):
-        return FILTER_PRESETS.get(self.filter_var.get())
+    def _process_ui_queue(self):
+        try:
+            while True:
+                event = self.packet_queue.get_nowait()
+                self._handle_ui_event(event)
+        except queue.Empty:
+            pass
+        self.after(50, self._process_ui_queue)
 
-    def _log_info(self, message):
-        self.packet_display.insert("end", f"[INFO] {message}\n", "INFO")
-        self.packet_display.see("end")
+    def _enqueue_detector_event(self, payload):
+        # payload: (time_str, src, dst, "ALERT: ...")
+        self.packet_queue.put({"type": "alert", "payload": payload})
 
-    def _settings_summary(self, settings):
-        return (
-            f"syn={settings['syn_ports_threshold']}@{settings['syn_window']}s, "
-            f"icmp={settings['icmp_flood_threshold']}, udp={settings['udp_flood_threshold']}, "
-            f"ssh={settings['ssh_failed_login_threshold']}@{settings['ssh_failed_login_window']}s, "
-            f"vnc={settings['vnc_failed_login_threshold']}@{settings['vnc_failed_login_window']}s, "
-            f"cooldown={settings['alert_cooldown_seconds']}s"
-        )
+    def _summarize_packet(self, pkt):
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        length = len(pkt)
 
-    def display_packet_or_alert(self, data):
-        timestamp, src, dst, proto = data
+        if pkt.haslayer(IP):
+            src = pkt[IP].src
+            dst = pkt[IP].dst
+            if pkt.haslayer(TCP):
+                proto = "TCP"
+                info = f"{pkt[TCP].sport} -> {pkt[TCP].dport} flags={pkt[TCP].sprintf('%flags%')}"
+            elif pkt.haslayer(UDP):
+                proto = "UDP"
+                info = f"{pkt[UDP].sport} -> {pkt[UDP].dport}"
+            elif pkt.haslayer(ICMP):
+                proto = "ICMP"
+                info = f"type={pkt[ICMP].type} code={pkt[ICMP].code}"
+            else:
+                proto = "OTHER"
+                info = "IP packet"
+        elif pkt.haslayer(ARP):
+            proto = "ARP"
+            src = getattr(pkt[ARP], "psrc", "-")
+            dst = getattr(pkt[ARP], "pdst", "-")
+            op = "reply" if pkt[ARP].op == 2 else "request"
+            info = f"ARP {op}"
+        else:
+            proto = "OTHER"
+            src = "-"
+            dst = "-"
+            info = pkt.summary()
 
-        is_alert = proto.startswith("ALERT:")
+        return {
+            "time": now,
+            "source": src,
+            "destination": dst,
+            "protocol": proto,
+            "length": str(length),
+            "info": info,
+        }
 
-        if is_alert:
+    def _format_hex(self, pkt):
+        raw = bytes(pkt)
+        lines = []
+        for i in range(0, len(raw), 16):
+            chunk = raw[i : i + 16]
+            hex_part = " ".join(f"{b:02x}" for b in chunk)
+            ascii_part = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
+            lines.append(f"{i:04x}  {hex_part:<47}  {ascii_part}")
+        return "\n".join(lines)
+
+    def _passes_filters(self, record):
+        summary = record["summary"]
+        proto = summary["protocol"]
+        var = self.proto_vars.get(proto)
+        if var and not var.get():
+            return False
+
+        query = self.search_var.get().strip().lower()
+        if query:
+            text = " ".join(
+                [
+                    summary["source"],
+                    summary["destination"],
+                    summary["protocol"],
+                    summary["info"],
+                ]
+            ).lower()
+            if query not in text:
+                return False
+        return True
+
+    def _max_view_count(self):
+        try:
+            value = int(self.max_view_var.get().strip())
+            return max(100, min(value, 50000))
+        except Exception:
+            return 5000
+
+    def _rebuild_tree(self):
+        selection = self.packet_tree.selection()
+        selected_no = None
+        if selection:
+            vals = self.packet_tree.item(selection[0], "values")
+            if vals:
+                selected_no = vals[0]
+
+        self.packet_tree.delete(*self.packet_tree.get_children())
+
+        max_view = self._max_view_count()
+        visible = [r for r in self.packet_records if self._passes_filters(r)]
+        visible = visible[-max_view:]
+
+        for record in visible:
+            s = record["summary"]
+            values = (
+                record["no"],
+                s["time"],
+                s["source"],
+                s["destination"],
+                s["protocol"],
+                s["length"],
+                s["info"],
+            )
+            tags = ("ALERT",) if s["protocol"] == "ALERT" else ()
+            item_id = self.packet_tree.insert("", "end", values=values, tags=tags)
+            if selected_no and str(record["no"]) == str(selected_no):
+                self.packet_tree.selection_set(item_id)
+
+        if self.auto_scroll_var.get():
+            children = self.packet_tree.get_children()
+            if children:
+                self.packet_tree.see(children[-1])
+
+    def _handle_ui_event(self, event):
+        kind = event.get("type")
+        if kind == "packet":
+            if self.paused:
+                return
+            record = event["record"]
+            self.packet_records.append(record)
+            self.packet_count += 1
+            self.counter_label.configure(text=f"Packets: {self.packet_count}")
+            if self._passes_filters(record):
+                self._append_record_to_tree(record)
+        elif kind == "alert":
+            time_str, src, dst, proto_text = event["payload"]
+            msg = proto_text.replace("ALERT:", "").strip()
             self.alert_count += 1
             self.alert_label.configure(text=f"Alerts: {self.alert_count}")
+            self.packet_counter += 1
+            record = {
+                "no": self.packet_counter,
+                "summary": {
+                    "time": time_str,
+                    "source": src,
+                    "destination": dst,
+                    "protocol": "ALERT",
+                    "length": "-",
+                    "info": msg,
+                },
+                "packet": None,
+            }
+            self.packet_records.append(record)
+            if self._passes_filters(record):
+                self._append_record_to_tree(record)
 
-            alert_msg = proto.replace("ALERT:", "").strip()
-            self.packet_display.insert("end", "\n" + "=" * 100 + "\n", "ALERT")
-            self.packet_display.insert("end", f"SECURITY ALERT at {timestamp}\n", "ALERT")
-            self.packet_display.insert("end", f"Source: {src} -> Destination: {dst}\n", "ALERT")
-            self.packet_display.insert("end", f"Details: {alert_msg}\n", "ALERT")
-            self.packet_display.insert("end", "=" * 100 + "\n\n", "ALERT")
-            self.packet_display.see("end")
-            return
+    def _append_record_to_tree(self, record):
+        s = record["summary"]
+        values = (
+            record["no"],
+            s["time"],
+            s["source"],
+            s["destination"],
+            s["protocol"],
+            s["length"],
+            s["info"],
+        )
+        tags = ("ALERT",) if s["protocol"] == "ALERT" else ()
+        self.packet_tree.insert("", "end", values=values, tags=tags)
+        if self.auto_scroll_var.get():
+            children = self.packet_tree.get_children()
+            if children:
+                self.packet_tree.see(children[-1])
 
-        self.packet_count += 1
-        self.counter_label.configure(text=f"Packets: {self.packet_count}")
-
-        if not self.header_printed:
-            header = f"{'TIME':<12} | {'SOURCE IP':<16} | {'DESTINATION IP':<16} | PROTOCOL\n"
-            separator = "-" * 75 + "\n"
-            self.packet_display.insert("end", header, "HEADER")
-            self.packet_display.insert("end", separator, "HEADER")
-            self.header_printed = True
-
-        self.packet_display.insert("end", f"{timestamp:<12} ", "TIME")
-        self.packet_display.insert("end", "| ")
-        self.packet_display.insert("end", f"{src:<16} ", "IP")
-        self.packet_display.insert("end", "| ")
-        self.packet_display.insert("end", f"{dst:<16} ", "IP")
-        self.packet_display.insert("end", "| ")
-        self.packet_display.insert("end", f"{proto}\n", proto)
-        self.packet_display.see("end")
-
-    def process_packet(self, packet):
-        self.detector.submit(packet)
-
-    def sniff_packets(self):
-        bpf_filter = self._selected_bpf_filter()
-
-        try:
-            self._log_info(f"Starting capture on {self.name}")
-            self._log_info(f"Interface: {self.iface}")
-            self._log_info("Detection settings: " + self._settings_summary(self.detection_settings))
-            if bpf_filter:
-                self._log_info(f"Capture filter: {bpf_filter}")
-
-            while self.sniffing:
-                sniff_kwargs = {
-                    "prn": self.process_packet,
-                    "store": False,
-                    "iface": self.iface,
-                    "timeout": 1,
-                }
-                if bpf_filter:
-                    sniff_kwargs["filter"] = bpf_filter
-                sniff(**sniff_kwargs)
-
-        except PermissionError:
-            error_msg = (
-                "\nPERMISSION DENIED\n"
-                "Run this app with Administrator/root privileges to capture packets.\n\n"
-            )
-            self.packet_display.insert("end", error_msg, "ALERT")
-            self.sniffing = False
-            self.stop_sniffing()
-
-        except Exception as e:
-            # Filter may fail on some environments. Retry without filter once.
-            if bpf_filter:
-                try:
-                    self._log_info("Capture filter failed in this environment; retrying without filter.")
-                    while self.sniffing:
-                        sniff(prn=self.process_packet, store=False, iface=self.iface, timeout=1)
-                    return
-                except Exception as fallback_error:
-                    e = fallback_error
-
-            error_msg = (
-                f"\nERROR: {str(e)}\n"
-                "Possible causes:\n"
-                "- Need Administrator/sudo privileges\n"
-                "- Interface may not support packet capture\n"
-                "- Npcap/WinPcap not installed properly\n\n"
-            )
-            self.packet_display.insert("end", error_msg, "ALERT")
-            self.sniffing = False
-            self.stop_sniffing()
+    def _capture_callback(self, pkt):
+        self.packet_counter += 1
+        summary = self._summarize_packet(pkt)
+        record = {"no": self.packet_counter, "summary": summary, "packet": pkt}
+        self.packet_queue.put({"type": "packet", "record": record})
+        self.detector.submit(pkt)
 
     def start_sniffing(self):
         if self.sniffing:
@@ -370,62 +419,180 @@ class SnifferWindow(ctk.CTkToplevel):
             return
 
         self.sniffing = True
+        self.paused = False
         self.start_time = time.time()
         self._packet_count_last_tick = self.packet_count
-        self.filter_menu.configure(state="disabled")
 
-        self.sniff_thread = threading.Thread(target=self.sniff_packets, daemon=True)
+        self.pause_button.configure(state="normal", text="Pause")
+        self.start_button.configure(text="Stop", fg_color=("#C62828", "#B71C1C"), hover_color=("#D32F2F", "#C62828"))
+        self.status_indicator.configure(text_color="#4CAF50")
+
+        self.sniff_thread = threading.Thread(target=self._sniff_loop, daemon=True)
         self.sniff_thread.start()
 
-        self.start_button.configure(
-            text="Stop Monitoring",
-            fg_color=("#C62828", "#B71C1C"),
-            hover_color=("#D32F2F", "#C62828"),
-            command=self.stop_sniffing,
-        )
-        self.status_indicator.configure(text_color="#4CAF50")
+    def _sniff_loop(self):
+        bpf = self.bpf_entry.get().strip()
+        self._log_info(f"Capture start on {self.name}")
+        if bpf:
+            self._log_info(f"BPF: {bpf}")
+
+        while self.sniffing:
+            try:
+                kwargs = {
+                    "prn": self._capture_callback,
+                    "store": False,
+                    "iface": self.iface,
+                    "timeout": 1,
+                }
+                if bpf:
+                    kwargs["filter"] = bpf
+                sniff(**kwargs)
+            except PermissionError:
+                self.packet_queue.put(
+                    {
+                        "type": "alert",
+                        "payload": (
+                            datetime.datetime.now().strftime("%H:%M:%S"),
+                            "local",
+                            self.iface,
+                            "ALERT: Permission denied. Run as Administrator/root.",
+                        ),
+                    }
+                )
+                self.sniffing = False
+            except Exception as e:
+                if bpf:
+                    self._log_info("BPF failed; retrying without filter.")
+                    bpf = ""
+                    continue
+                self.packet_queue.put(
+                    {
+                        "type": "alert",
+                        "payload": (
+                            datetime.datetime.now().strftime("%H:%M:%S"),
+                            "local",
+                            self.iface,
+                            f"ALERT: Capture error: {e}",
+                        ),
+                    }
+                )
+                self.sniffing = False
 
     def stop_sniffing(self):
         self.sniffing = False
-        self.filter_menu.configure(state="normal")
-        self.start_button.configure(
-            text="Start Monitoring",
-            fg_color=("#2E7D32", "#1B5E20"),
-            hover_color=("#388E3C", "#2E7D32"),
-            command=self.start_sniffing,
-        )
+        self.paused = False
+        self.start_button.configure(text="Start", fg_color=("#2E7D32", "#1B5E20"), hover_color=("#388E3C", "#2E7D32"))
+        self.pause_button.configure(state="disabled", text="Pause")
         self.status_indicator.configure(text_color="gray")
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        self.pause_button.configure(text="Resume" if self.paused else "Pause")
+        self._log_info("Display paused" if self.paused else "Display resumed")
+
+    def clear_packets(self):
+        self.packet_records = []
+        self.packet_tree.delete(*self.packet_tree.get_children())
+        self.detail_text.delete("1.0", "end")
+        self.raw_text.delete("1.0", "end")
+        self.packet_count = 0
+        self.alert_count = 0
+        self.packet_counter = 0
+        self.counter_label.configure(text="Packets: 0")
+        self.alert_label.configure(text="Alerts: 0")
+        self.rate_label.configure(text="Rate: 0 pkt/s")
+
+    def _find_record_by_no(self, no):
+        for rec in self.packet_records:
+            if str(rec["no"]) == str(no):
+                return rec
+        return None
+
+    def _on_packet_select(self, _event):
+        selected = self.packet_tree.selection()
+        if not selected:
+            return
+        vals = self.packet_tree.item(selected[0], "values")
+        if not vals:
+            return
+        rec = self._find_record_by_no(vals[0])
+        if not rec:
+            return
+
+        self.detail_text.delete("1.0", "end")
+        self.raw_text.delete("1.0", "end")
+
+        pkt = rec["packet"]
+        if pkt is None:
+            s = rec["summary"]
+            self.detail_text.insert("end", f"ALERT\nTime: {s['time']}\nSource: {s['source']}\nDestination: {s['destination']}\n\n{s['info']}")
+            return
+
+        try:
+            self.detail_text.insert("end", pkt.show(dump=True))
+            self.raw_text.insert("end", self._format_hex(pkt))
+        except Exception as e:
+            self.detail_text.insert("end", f"Failed to decode packet details: {e}")
+
+    def save_pcap(self):
+        packets = [r["packet"] for r in self.packet_records if r["packet"] is not None]
+        if not packets:
+            messagebox.showinfo("Save PCAP", "No packets captured yet.")
+            return
+
+        default_dir = Path("data")
+        default_dir.mkdir(parents=True, exist_ok=True)
+        default_name = f"capture_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+        file_path = filedialog.asksaveasfilename(
+            title="Save capture as PCAP",
+            initialdir=str(default_dir.resolve()),
+            initialfile=default_name,
+            defaultextension=".pcap",
+            filetypes=[("PCAP files", "*.pcap"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        wrpcap(file_path, packets)
+        self._log_info(f"Saved {len(packets)} packets to {file_path}")
+
+    def _log_info(self, msg):
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        self.packet_counter += 1
+        record = {
+            "no": self.packet_counter,
+            "summary": {
+                "time": now,
+                "source": "local",
+                "destination": self.iface,
+                "protocol": "OTHER",
+                "length": "-",
+                "info": msg,
+            },
+            "packet": None,
+        }
+        self.packet_records.append(record)
+        if self._passes_filters(record):
+            self._append_record_to_tree(record)
 
     def show_alerts_history(self):
         alerts_window = ctk.CTkToplevel(self)
         alerts_window.title("Alert History")
-        alerts_window.geometry("900x600")
+        alerts_window.geometry("1000x620")
         alerts_window.transient(self)
 
-        header_frame = ctk.CTkFrame(alerts_window, fg_color="transparent")
-        header_frame.pack(fill="x", padx=20, pady=20)
+        text = ctk.CTkTextbox(alerts_window, font=("Consolas", 10))
+        text.pack(fill="both", expand=True, padx=16, pady=16)
 
-        ctk.CTkLabel(header_frame, text="Security Alerts History", font=("Segoe UI", 24, "bold")).pack()
-        ctk.CTkLabel(header_frame, text="Last 100 alerts from database", font=("Segoe UI", 12), text_color="gray").pack()
-
-        alerts_text = ctk.CTkTextbox(alerts_window, font=("Consolas", 10), fg_color=("#1a1a1a", "#0a0a0a"))
-        alerts_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-        alerts = self.logger.recent(100)
-
-        if not alerts:
-            alerts_text.insert("end", "No alerts recorded yet.\n\n")
+        rows = self.logger.recent(200)
+        if not rows:
+            text.insert("end", "No alerts recorded yet.\n")
         else:
-            header = f"{'TIMESTAMP':<20} | {'SOURCE':<16} | {'DEST':<16} | {'PROTO':<8} | ALERT\n"
-            alerts_text.insert("end", header)
-            alerts_text.insert("end", "-" * 120 + "\n")
-
-            for ts, src, dst, proto, alert_msg in alerts:
+            text.insert("end", f"{'TIMESTAMP':<20} | {'SOURCE':<16} | {'DEST':<16} | {'PROTO':<8} | ALERT\n")
+            text.insert("end", "-" * 125 + "\n")
+            for ts, src, dst, proto, alert_msg in rows:
                 ts_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                line = f"{ts_str:<20} | {src:<16} | {dst:<16} | {proto:<8} | {alert_msg}\n"
-                alerts_text.insert("end", line)
-
-        alerts_text.configure(state="disabled")
+                text.insert("end", f"{ts_str:<20} | {src:<16} | {dst:<16} | {proto:<8} | {alert_msg}\n")
 
     def export_alerts(self):
         default_dir = Path("data")
@@ -443,8 +610,17 @@ class SnifferWindow(ctk.CTkToplevel):
         if not file_path:
             return
 
-        exported = self.logger.export_csv(file_path, limit=2000)
+        exported = self.logger.export_csv(file_path, limit=5000)
         self._log_info(f"Exported {exported} alerts to {file_path}")
+
+    def _settings_summary(self, settings):
+        return (
+            f"syn={settings['syn_ports_threshold']}@{settings['syn_window']}s, "
+            f"icmp={settings['icmp_flood_threshold']}, udp={settings['udp_flood_threshold']}, "
+            f"ssh={settings['ssh_failed_login_threshold']}@{settings['ssh_failed_login_window']}s, "
+            f"vnc={settings['vnc_failed_login_threshold']}@{settings['vnc_failed_login_window']}s, "
+            f"cooldown={settings['alert_cooldown_seconds']}s"
+        )
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -489,24 +665,15 @@ class SnifferWindow(ctk.CTkToplevel):
         buttons.grid_columnconfigure(1, weight=1)
         buttons.grid_columnconfigure(2, weight=1)
 
-        ctk.CTkButton(buttons, text="Apply Now", command=lambda: self.apply_settings(persist=False)).grid(
-            row=0, column=0, padx=6, sticky="ew"
-        )
-        ctk.CTkButton(buttons, text="Save and Apply", command=lambda: self.apply_settings(persist=True)).grid(
-            row=0, column=1, padx=6, sticky="ew"
-        )
-        ctk.CTkButton(buttons, text="Reset Defaults", command=self.reset_default_settings).grid(
-            row=0, column=2, padx=6, sticky="ew"
-        )
+        ctk.CTkButton(buttons, text="Apply Now", command=lambda: self.apply_settings(persist=False)).grid(row=0, column=0, padx=6, sticky="ew")
+        ctk.CTkButton(buttons, text="Save and Apply", command=lambda: self.apply_settings(persist=True)).grid(row=0, column=1, padx=6, sticky="ew")
+        ctk.CTkButton(buttons, text="Reset Defaults", command=self.reset_default_settings).grid(row=0, column=2, padx=6, sticky="ew")
 
     def _collect_settings_from_ui(self):
         raw = {}
         for key, _label, cast_type in SETTING_FIELDS:
             text = self.settings_vars[key].get().strip()
-            if cast_type is int:
-                raw[key] = int(text)
-            else:
-                raw[key] = float(text)
+            raw[key] = int(text) if cast_type is int else float(text)
         return raw
 
     def apply_settings(self, persist=False):
@@ -523,18 +690,17 @@ class SnifferWindow(ctk.CTkToplevel):
 
         if persist:
             save_settings(validated)
-            status_text = "Settings saved and applied."
+            status = "Settings saved and applied."
         else:
-            status_text = "Settings applied for current session."
+            status = "Settings applied for this session."
 
         if self.settings_status:
-            self.settings_status.configure(text=status_text, text_color="#81C784")
-
-        self._log_info(status_text + " " + self._settings_summary(validated))
+            self.settings_status.configure(text=status, text_color="#81C784")
+        self._log_info(status + " " + self._settings_summary(validated))
 
     def reset_default_settings(self):
         defaults = default_settings()
-        for key, _label, _cast_type in SETTING_FIELDS:
+        for key, _label, _cast in SETTING_FIELDS:
             self.settings_vars[key].set(str(defaults[key]))
         self.apply_settings(persist=True)
 

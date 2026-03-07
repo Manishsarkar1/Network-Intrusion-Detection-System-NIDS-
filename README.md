@@ -1,25 +1,27 @@
 # Network Intrusion Detection System (NIDS)
 
-A Python GUI NIDS project built with Scapy + CustomTkinter.
+A Python GUI NIDS + packet analyzer built with Scapy and CustomTkinter.
 
-## What Was Enhanced
+## Analyzer Features (Wireshark-style controls)
 
-- Live runtime stats in monitor window:
-  - Packet rate (packets/second)
-  - Session uptime timer
-- Capture filter presets:
-  - All, TCP, UDP, ICMP, ARP
-- Export alerts to CSV from the UI
-- Better runtime stability:
-  - Non-blocking sniff loop (`timeout=1`) for faster stop response
-  - Graceful detector thread shutdown on window close
-  - Auto fallback to unfiltered sniff if BPF filtering is unavailable
-- Detection settings panel:
-  - Edit SYN/ICMP/UDP/SSH/VNC thresholds and windows
-  - Edit global alert cooldown
-  - `Apply Now` for live updates to running detector
-  - `Save and Apply` for persistence across restarts
-  - `Reset Defaults` for quick recovery
+- Packet list table with columns:
+  - No, Time, Source, Destination, Protocol, Length, Info
+- Protocol decode + raw hex pane on packet click
+- Capture filter (BPF) input + quick presets
+- Display filtering:
+  - Per-protocol toggles (TCP/UDP/ICMP/ARP/OTHER/ALERT)
+  - Live search across src/dst/proto/info
+  - Adjustable max visible rows
+- Capture controls:
+  - Start/Stop
+  - Pause/Resume display
+  - Clear
+  - Save capture to PCAP
+- IDS features integrated in same window:
+  - Live alerts injected into packet table
+  - Alert history viewer
+  - Export alerts CSV
+  - Detection settings editor (apply/save/reset)
 
 ## Project Layout
 
@@ -27,7 +29,7 @@ A Python GUI NIDS project built with Scapy + CustomTkinter.
 - `nids_core/`: Core GUI + detector modules
 - `scripts/`: Test/helper scripts
 - `docs/`: Notes and extended docs
-- `data/`: Runtime database and exports
+- `data/`: Runtime database, settings, and exports
 
 ## Run
 
@@ -39,6 +41,6 @@ A Python GUI NIDS project built with Scapy + CustomTkinter.
 ## Notes
 
 - Alerts DB: `data/nids_alerts.db`
-- User settings file: `data/detection_settings.json`
-- Exported CSV files default to `data/`
+- User settings: `data/detection_settings.json`
+- Exports default to `data/`
 - Windows users need Npcap installed
