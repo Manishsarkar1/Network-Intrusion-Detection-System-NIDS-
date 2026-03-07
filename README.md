@@ -2,34 +2,26 @@
 
 A Python GUI NIDS + packet analyzer built with Scapy and CustomTkinter.
 
-## Analyzer Features (Wireshark-style controls)
+## Look and Feel
 
-- Packet list table with columns:
-  - No, Time, Source, Destination, Protocol, Length, Info
-- Protocol decode + raw hex pane on packet click
-- Capture filter (BPF) input + quick presets
-- Display filtering:
-  - Per-protocol toggles (TCP/UDP/ICMP/ARP/OTHER/ALERT)
-  - Live search across src/dst/proto/info
-  - Adjustable max visible rows
-- Capture controls:
-  - Start/Stop
-  - Pause/Resume display
-  - Clear
-  - Save capture to PCAP
-- IDS features integrated in same window:
-  - Live alerts injected into packet table
-  - Alert history viewer
-  - Export alerts CSV
-  - Detection settings editor (apply/save/reset)
+This project now uses a custom dark "NIDS Studio" layout (not a Wireshark-style table clone):
 
-## Project Layout
+- Left: live traffic rail with protocol-colored packet cards
+- Right: inspector panel with switchable protocol details / raw hex view
+- Top: operation bar with capture control, exports, and settings
+- Dedicated filter row for BPF + search + protocol toggles
 
-- `main.py`: Root launcher
-- `nids_core/`: Core GUI + detector modules
-- `scripts/`: Test/helper scripts
-- `docs/`: Notes and extended docs
-- `data/`: Runtime database, settings, and exports
+## Features
+
+- Start/Stop capture
+- Pause/Resume live rendering
+- BPF capture filter + quick presets
+- Display filtering (search + protocol toggles)
+- Packet inspect panel (decoded structure + hex)
+- Save captured packets to PCAP
+- Integrated IDS alerts in the live rail
+- Alerts history and CSV export
+- Runtime detection threshold settings (apply/save/reset)
 
 ## Run
 
