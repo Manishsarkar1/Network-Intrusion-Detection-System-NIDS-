@@ -98,7 +98,6 @@ class SnifferWindow(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=1)
 
-        # Header card
         header = ctk.CTkFrame(self, corner_radius=14, fg_color=("#0f172a", "#0b1220"))
         header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
         header.grid_columnconfigure(1, weight=1)
@@ -127,7 +126,6 @@ class SnifferWindow(ctk.CTkToplevel):
         self.uptime_label = ctk.CTkLabel(stats, text="Uptime 00:00:00", text_color="#93c5fd")
         self.uptime_label.pack(anchor="e")
 
-        # Action row
         actions = ctk.CTkFrame(self, corner_radius=12, fg_color=("#111827", "#111827"))
         actions.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
         for i in range(7):
@@ -143,7 +141,6 @@ class SnifferWindow(ctk.CTkToplevel):
         ctk.CTkButton(actions, text="Detection Settings", command=self.open_settings_window).grid(row=0, column=5, padx=6, pady=8, sticky="ew")
         ctk.CTkButton(actions, text="Alert History", command=self.show_alerts_history).grid(row=0, column=6, padx=6, pady=8, sticky="ew")
 
-        # Filter row
         filters = ctk.CTkFrame(self, corner_radius=12, fg_color=("#111827", "#111827"))
         filters.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
         filters.grid_columnconfigure(1, weight=1)
@@ -154,9 +151,12 @@ class SnifferWindow(ctk.CTkToplevel):
         self.bpf_entry.grid(row=0, column=1, padx=4, pady=8, sticky="ew")
 
         self.capture_preset_var = ctk.StringVar(value="None")
-        ctk.CTkOptionMenu(filters, variable=self.capture_preset_var, values=list(CAPTURE_PRESETS.keys()), command=self._apply_capture_preset).grid(
-            row=0, column=2, padx=4, pady=8, sticky="ew"
-        )
+        ctk.CTkOptionMenu(
+            filters,
+            variable=self.capture_preset_var,
+            values=list(CAPTURE_PRESETS.keys()),
+            command=self._apply_capture_preset,
+        ).grid(row=0, column=2, padx=4, pady=8, sticky="ew")
 
         ctk.CTkLabel(filters, text="Search").grid(row=0, column=3, padx=(8, 4), pady=8, sticky="w")
         self.search_var = ctk.StringVar(value="")
@@ -171,7 +171,6 @@ class SnifferWindow(ctk.CTkToplevel):
         self.max_view_var.trace_add("write", lambda *_: self._rebuild_event_rail())
         ctk.CTkEntry(filters, textvariable=self.max_view_var, width=70).grid(row=0, column=6, padx=(4, 12), pady=8)
 
-        # Main content split
         main = ctk.CTkFrame(self, corner_radius=12, fg_color=("#0b1020", "#0b1020"))
         main.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 12))
         main.grid_columnconfigure(0, weight=3)
@@ -185,7 +184,11 @@ class SnifferWindow(ctk.CTkToplevel):
             var = ctk.BooleanVar(value=True)
             self.proto_vars[proto] = var
             ctk.CTkCheckBox(proto_wrap, text=proto, variable=var, command=self._rebuild_event_rail).grid(
-                row=0, column=idx, padx=8, pady=4, sticky="w"
+                row=0,
+                column=idx,
+                padx=8,
+                pady=4,
+                sticky="w",
             )
 
         rail_card = ctk.CTkFrame(main, corner_radius=10, fg_color=("#121a2a", "#121a2a"))
@@ -204,8 +207,12 @@ class SnifferWindow(ctk.CTkToplevel):
         ctk.CTkLabel(inspect_card, text="Inspector", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 4))
 
         self.inspect_mode = ctk.StringVar(value="details")
-        mode = ctk.CTkSegmentedButton(inspect_card, values=["details", "hex"], variable=self.inspect_mode, command=lambda _: self._render_selected())
-        mode.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        ctk.CTkSegmentedButton(
+            inspect_card,
+            values=["details", "hex"],
+            variable=self.inspect_mode,
+            command=lambda _: self._render_selected(),
+        ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
 
         self.inspect_text = ctk.CTkTextbox(inspect_card, font=("Consolas", 11), fg_color=("#0f172a", "#0f172a"))
         self.inspect_text.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -230,11 +237,17 @@ class SnifferWindow(ctk.CTkToplevel):
     def _enqueue_detector_event(self, payload):
         self.packet_queue.put({"type": "alert", "payload": payload})
 
+    def _enqueue_local_info(self, message):
+        self.packet_queue.put({"type": "local", "message": message})
+
     def _process_ui_queue(self):
         try:
             while True:
                 event = self.packet_queue.get_nowait()
-                self._handle_ui_event(event)
+                try:
+                    self._handle_ui_event(event)
+                except Exception as ex:
+                    print(f"[UI] Event handling error: {ex}")
         except queue.Empty:
             pass
         self.after(50, self._process_ui_queue)
@@ -313,8 +326,16 @@ class SnifferWindow(ctk.CTkToplevel):
         return visible[-self._max_view_count() :]
 
     def _clear_rail_widgets(self):
-        for w in self.rail.winfo_children():
-            w.destroy()
+        for widget in self.rail.winfo_children():
+            widget.destroy()
+
+    def _scroll_rail_to_end(self):
+        try:
+            canvas = getattr(self.rail, "_parent_canvas", None)
+            if canvas is not None:
+                canvas.yview_moveto(1.0)
+        except Exception:
+            pass
 
     def _build_card(self, parent, record):
         s = record["summary"]
@@ -322,28 +343,30 @@ class SnifferWindow(ctk.CTkToplevel):
         color = PROTO_COLORS.get(proto, "#B0BEC5")
         is_selected = self.selected_no == record["no"]
 
-        card = ctk.CTkFrame(parent, corner_radius=8, fg_color=("#172036", "#172036") if not is_selected else ("#1f2a44", "#1f2a44"))
+        card = ctk.CTkFrame(
+            parent,
+            corner_radius=8,
+            fg_color=("#172036", "#172036") if not is_selected else ("#1f2a44", "#1f2a44"),
+        )
         card.pack(fill="x", padx=4, pady=4)
 
-        left = ctk.CTkFrame(card, width=6, fg_color=color, corner_radius=6)
-        left.pack(side="left", fill="y", padx=(0, 8), pady=0)
+        ctk.CTkFrame(card, width=6, fg_color=color, corner_radius=6).pack(side="left", fill="y", padx=(0, 8), pady=0)
 
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=6)
 
-        top = f"#{record['no']}  {s['time']}  [{proto}]  {s['source']} -> {s['destination']}"
-        ctk.CTkLabel(body, text=top, anchor="w", font=("Consolas", 12, "bold"), text_color="#e2e8f0").pack(fill="x")
+        title = f"#{record['no']}  {s['time']}  [{proto}]  {s['source']} -> {s['destination']}"
+        ctk.CTkLabel(body, text=title, anchor="w", font=("Consolas", 12, "bold"), text_color="#e2e8f0").pack(fill="x")
         ctk.CTkLabel(body, text=f"len {s['length']} | {s['info']}", anchor="w", text_color="#94a3b8").pack(fill="x")
 
-        btn = ctk.CTkButton(
+        ctk.CTkButton(
             card,
             text="Inspect",
             width=80,
             fg_color=("#334155", "#334155"),
             hover_color=("#475569", "#475569"),
             command=lambda n=record["no"]: self._select_record(n),
-        )
-        btn.pack(side="right", padx=8, pady=8)
+        ).pack(side="right", padx=8, pady=8)
 
     def _rebuild_event_rail(self):
         self._clear_rail_widgets()
@@ -351,7 +374,7 @@ class SnifferWindow(ctk.CTkToplevel):
             self._build_card(self.rail, record)
 
         if self.auto_scroll_var.get():
-            self.rail._parent_canvas.yview_moveto(1.0)
+            self._scroll_rail_to_end()
 
     def _select_record(self, no):
         self.selected_no = no
@@ -359,9 +382,9 @@ class SnifferWindow(ctk.CTkToplevel):
         self._render_selected()
 
     def _find_record(self, no):
-        for r in self.packet_records:
-            if r["no"] == no:
-                return r
+        for rec in self.packet_records:
+            if rec["no"] == no:
+                return rec
         return None
 
     def _render_selected(self):
@@ -378,7 +401,10 @@ class SnifferWindow(ctk.CTkToplevel):
         pkt = rec["packet"]
         if pkt is None:
             s = rec["summary"]
-            self.inspect_text.insert("end", f"ALERT\nTime: {s['time']}\nSource: {s['source']}\nDestination: {s['destination']}\n\n{s['info']}")
+            self.inspect_text.insert(
+                "end",
+                f"ALERT\nTime: {s['time']}\nSource: {s['source']}\nDestination: {s['destination']}\n\n{s['info']}",
+            )
             return
 
         try:
@@ -391,6 +417,7 @@ class SnifferWindow(ctk.CTkToplevel):
 
     def _handle_ui_event(self, event):
         kind = event.get("type")
+
         if kind == "packet":
             if self.paused:
                 return
@@ -402,7 +429,9 @@ class SnifferWindow(ctk.CTkToplevel):
             if self.selected_no is None:
                 self.selected_no = rec["no"]
                 self._render_selected()
-        elif kind == "alert":
+            return
+
+        if kind == "alert":
             t, src, dst, alert_proto = event["payload"]
             msg = alert_proto.replace("ALERT:", "").strip()
             self.alert_count += 1
@@ -423,10 +452,18 @@ class SnifferWindow(ctk.CTkToplevel):
             }
             self.packet_records.append(rec)
             self._rebuild_event_rail()
+            return
+
+        if kind == "local":
+            self._log_local(event["message"])
 
     def _capture_callback(self, pkt):
         self.packet_counter += 1
-        rec = {"no": self.packet_counter, "summary": self._summarize_packet(pkt), "packet": pkt}
+        rec = {
+            "no": self.packet_counter,
+            "summary": self._summarize_packet(pkt),
+            "packet": pkt,
+        }
         self.packet_queue.put({"type": "packet", "record": rec})
         self.detector.submit(pkt)
 
@@ -448,13 +485,18 @@ class SnifferWindow(ctk.CTkToplevel):
 
     def _sniff_loop(self):
         bpf = self.bpf_entry.get().strip()
-        self._log_local(f"Capture started on {self.name}")
+        self._enqueue_local_info(f"Capture started on {self.name}")
         if bpf:
-            self._log_local(f"BPF filter: {bpf}")
+            self._enqueue_local_info(f"BPF filter: {bpf}")
 
         while self.sniffing:
             try:
-                kwargs = {"prn": self._capture_callback, "store": False, "iface": self.iface, "timeout": 1}
+                kwargs = {
+                    "prn": self._capture_callback,
+                    "store": False,
+                    "iface": self.iface,
+                    "timeout": 1,
+                }
                 if bpf:
                     kwargs["filter"] = bpf
                 sniff(**kwargs)
@@ -473,9 +515,10 @@ class SnifferWindow(ctk.CTkToplevel):
                 self.sniffing = False
             except Exception as e:
                 if bpf:
-                    self._log_local("BPF failed, retrying without BPF")
+                    self._enqueue_local_info("BPF failed, retrying without BPF")
                     bpf = ""
                     continue
+
                 self.packet_queue.put(
                     {
                         "type": "alert",
@@ -662,6 +705,7 @@ class SnifferWindow(ctk.CTkToplevel):
 
         self.detection_settings = validated
         self.detector.update_settings(validated)
+
         if persist:
             save_settings(validated)
             msg = "Settings saved and applied"
