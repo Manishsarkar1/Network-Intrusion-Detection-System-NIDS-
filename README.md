@@ -87,8 +87,8 @@ flowchart LR
 **1. Clone the repo**
 
 ```bash
-git clone [Network Intrusion Detection System](https://github.com/Manishsarkar1/Network-Intrusion-Detection-System-NIDS-)
-cd nids
+git clone https://github.com/Manishsarkar1/Network-Intrusion-Detection-System-NIDS-
+cd Network-Intrusion-Detection-System-NIDS
 ```
 
 **2. Create a virtual environment**
