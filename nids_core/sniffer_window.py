@@ -4,8 +4,8 @@ import datetime
 from scapy.all import sniff
 from scapy.layers.inet import IP
 import customtkinter as ctk
-from detector import Detector
-from logger import Logger
+from nids_core.detector import Detector
+from nids_core.logger import Logger
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")

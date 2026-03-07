@@ -1,7 +1,7 @@
 # interface_selector.py
 import customtkinter as ctk
-from os_utils import detect_os, get_interfaces_for_os
-from sniffer_window import SnifferWindow
+from nids_core.os_utils import detect_os, get_interfaces_for_os
+from nids_core.sniffer_window import SnifferWindow
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")

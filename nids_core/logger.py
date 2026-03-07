@@ -2,8 +2,13 @@
 import sqlite3
 import threading
 from datetime import datetime
+from pathlib import Path
 
-DB_PATH = "nids_alerts.db"
+try:
+    from nids_core.config import DB_PATH
+except ImportError:
+    DB_PATH = str(Path(__file__).resolve().parents[1] / "data" / "nids_alerts.db")
+
 
 class Logger:
     def __init__(self, db_path=DB_PATH):
@@ -12,6 +17,9 @@ class Logger:
         self._init_db()
 
     def _init_db(self):
+        db_dir = Path(self.db_path).parent
+        db_dir.mkdir(parents=True, exist_ok=True)
+
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         c = conn.cursor()
         c.execute("""CREATE TABLE IF NOT EXISTS alerts (
@@ -27,8 +35,10 @@ class Logger:
             with self._lock:
                 conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 c = conn.cursor()
-                c.execute("INSERT INTO alerts (ts, src, dst, proto, alert) VALUES (?,?,?,?,?)",
-                          (ts, src, dst, proto, message))
+                c.execute(
+                    "INSERT INTO alerts (ts, src, dst, proto, alert) VALUES (?,?,?,?,?)",
+                    (ts, src, dst, proto, message),
+                )
                 conn.commit()
                 conn.close()
         except Exception as e:

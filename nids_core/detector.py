@@ -3,11 +3,11 @@ import threading
 import time
 from collections import defaultdict, deque
 from scapy.layers.inet import IP, TCP, UDP, ICMP
-from scapy.layers.l2 import ARP, Ether
+from scapy.layers.l2 import ARP
 
 # Import configuration
 try:
-    from config import *
+    from nids_core.config import *
 except ImportError:
     # Fallback defaults if config.py not found
     SYN_WINDOW = 5.0

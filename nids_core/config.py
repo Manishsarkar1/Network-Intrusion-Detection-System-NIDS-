@@ -4,6 +4,8 @@ IDS Configuration File
 Adjust these values to tune detection sensitivity
 """
 
+from pathlib import Path
+
 # SYN Scan Detection
 SYN_WINDOW = 5.0  # Time window in seconds
 SYN_PORTS_THRESHOLD = 10  # Number of unique ports to trigger alert
@@ -28,4 +30,4 @@ ARP_WINDOW = 30.0  # Time window in seconds
 ARP_CONFLICT_THRESHOLD = 2  # Number of different MACs for same IP
 
 # Database
-DB_PATH = "nids_alerts.db"
+DB_PATH = str(Path(__file__).resolve().parents[1] / "data" / "nids_alerts.db")

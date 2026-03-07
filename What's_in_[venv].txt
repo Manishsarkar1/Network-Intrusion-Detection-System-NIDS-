@@ -1,4 +1,0 @@
-customtkinter
-socket
-scapy.all
-threads

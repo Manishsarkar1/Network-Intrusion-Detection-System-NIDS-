@@ -1,16 +1,24 @@
-# Network-Intrusion-Detection-System-NIDS-
-Just a jump start to packet sniffing and manipulation
+# Network Intrusion Detection System (NIDS)
 
-now this is where all the fun begins
+A Python-based GUI network intrusion detection project using Scapy and CustomTkinter.
 
-Day 3 :
-This is day 3 of the project and i only have 1hrs till i sleep and yet again tomorrow i have to go to the hospital and come home and then as always do my work.
-on day 3 I am frustrated out of why my previous code was not running thats why i deleted it and now i am doing it again
-got a bit success
+## Organized Project Layout
 
-Day 4:
-I didnt go to the hospital and was home all day and i managed to push my project a little further 
-and by further i mean to say how i made the UI a bit more responsive by adding the stop button, athough it was there before but the function (or in coding terms the "command") was not assigned to that button
+- `main.py`: Root launcher for the NIDS application.
+- `nids_core/`: Core detection and GUI modules.
+- `scripts/`: Traffic/testing helper scripts.
+- `docs/`: Supporting documentation and notes.
+- `data/`: Runtime artifacts (SQLite alerts DB).
 
-Date : 29 June 2025
-Trying to improve my NIDS further as because there is nothing that i have in this thing
+## Run
+
+1. Install dependencies:
+   `pip install -r requirements.txt`
+2. Run with admin/root privileges:
+   `python main.py`
+
+## Notes
+
+- Alerts are stored in `data/nids_alerts.db`.
+- Windows users need Npcap installed.
+- Testing helpers are in `scripts/test_ids.py` and `scripts/run_test_admin.bat`.

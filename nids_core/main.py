@@ -1,6 +1,6 @@
 # main.py
-from os_utils import detect_os, get_interfaces_for_os
-from Interface_selector import InterfaceSelector
+from nids_core.os_utils import detect_os, get_interfaces_for_os
+from nids_core.interface_selector import InterfaceSelector
 
 def main():
     os_name = detect_os()
