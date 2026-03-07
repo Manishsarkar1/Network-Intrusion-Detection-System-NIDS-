@@ -2,7 +2,8 @@
 import threading
 import time
 from collections import defaultdict, deque
-from scapy.layers.inet import IP, TCP, UDP, ICMP
+
+from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP
 
 # Import configuration
@@ -24,8 +25,10 @@ except ImportError:
     ARP_WINDOW = 30.0
     ARP_CONFLICT_THRESHOLD = 2
 
+
 def proto_name(num):
     return {6: "TCP", 17: "UDP", 1: "ICMP"}.get(num, "OTHER")
+
 
 class Detector:
     def __init__(self, logger=None, gui_callback=None):
@@ -34,6 +37,7 @@ class Detector:
         self.queue = deque()
         self.lock = threading.Lock()
         self.running = False
+        self.thread = None
 
         # Detection state trackers
         self.syn_history = defaultdict(lambda: deque())
@@ -41,11 +45,11 @@ class Detector:
         self.udp_history = defaultdict(lambda: deque())
         self.ssh_attempts = defaultdict(lambda: deque())
         self.vnc_attempts = defaultdict(lambda: deque())
-        
+
         # ARP poisoning detection
         self.arp_table = {}  # IP -> (MAC, last_seen_timestamp)
         self.arp_conflicts = defaultdict(lambda: deque())
-        
+
         # Alert cooldown to prevent spam
         self.alert_cooldown = {}  # (src, alert_type) -> last_alert_time
         self.cooldown_period = 10.0  # seconds
@@ -57,8 +61,10 @@ class Detector:
         self.thread = threading.Thread(target=self._consumer_loop, daemon=True)
         self.thread.start()
 
-    def stop(self):
+    def stop(self, join_timeout=1.0):
         self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=join_timeout)
 
     def submit(self, pkt):
         with self.lock:
@@ -81,11 +87,11 @@ class Detector:
 
     def _analyze(self, pkt):
         ts = time.time()
-        
+
         # ARP Detection (Layer 2)
         if pkt.haslayer(ARP):
             self._detect_arp_poisoning(pkt, ts)
-        
+
         # IP-based analysis
         if not pkt.haslayer(IP):
             return
@@ -120,11 +126,11 @@ class Detector:
         """Check if enough time has passed since last alert of this type"""
         key = (src, alert_type)
         now = time.time()
-        
+
         if key in self.alert_cooldown:
             if now - self.alert_cooldown[key] < self.cooldown_period:
                 return False
-        
+
         self.alert_cooldown[key] = now
         return True
 
@@ -134,11 +140,11 @@ class Detector:
         if (flags & 0x02) and not (flags & 0x10):  # SYN without ACK
             dq = self.syn_history[src]
             dq.append((ts, tcp.dport))
-            
+
             # Expire old entries
             while dq and (ts - dq[0][0]) > SYN_WINDOW:
                 dq.popleft()
-            
+
             unique_ports = {p for _, p in dq}
             if len(unique_ports) >= SYN_PORTS_THRESHOLD:
                 if self._should_alert(src, "SYN_SCAN"):
@@ -150,10 +156,10 @@ class Detector:
         """Detect ICMP flood (ping flood)"""
         dq = self.icmp_history[src]
         dq.append(ts)
-        
+
         while dq and (ts - dq[0]) > FLOOD_WINDOW:
             dq.popleft()
-        
+
         if len(dq) >= ICMP_FLOOD_THRESHOLD:
             if self._should_alert(src, "ICMP_FLOOD"):
                 msg = f"ICMP flood: {len(dq)} packets in {FLOOD_WINDOW}s"
@@ -164,10 +170,10 @@ class Detector:
         """Detect UDP flood"""
         dq = self.udp_history[src]
         dq.append(ts)
-        
+
         while dq and (ts - dq[0]) > FLOOD_WINDOW:
             dq.popleft()
-        
+
         if len(dq) >= UDP_FLOOD_THRESHOLD:
             if self._should_alert(src, "UDP_FLOOD"):
                 msg = f"UDP flood: {len(dq)} packets in {FLOOD_WINDOW}s"
@@ -183,11 +189,11 @@ class Detector:
                 key = (src, dst)
                 dq = self.ssh_attempts[key]
                 dq.append(ts)
-                
+
                 # Expire old attempts
                 while dq and (ts - dq[0]) > SSH_FAILED_LOGIN_WINDOW:
                     dq.popleft()
-                
+
                 if len(dq) >= SSH_FAILED_LOGIN_THRESHOLD:
                     if self._should_alert(src, "SSH_BRUTE"):
                         msg = f"SSH brute force: {len(dq)} connection attempts in {SSH_FAILED_LOGIN_WINDOW}s"
@@ -203,11 +209,11 @@ class Detector:
                 key = (src, dst, tcp.dport)
                 dq = self.vnc_attempts[key]
                 dq.append(ts)
-                
+
                 # Expire old attempts
                 while dq and (ts - dq[0]) > VNC_FAILED_LOGIN_WINDOW:
                     dq.popleft()
-                
+
                 if len(dq) >= VNC_FAILED_LOGIN_THRESHOLD:
                     if self._should_alert(src, f"VNC_BRUTE_{tcp.dport}"):
                         msg = f"VNC brute force: {len(dq)} attempts to port {tcp.dport} in {VNC_FAILED_LOGIN_WINDOW}s"
@@ -220,17 +226,17 @@ class Detector:
             arp = pkt[ARP]
             sender_ip = arp.psrc
             sender_mac = arp.hwsrc
-            
+
             # Check if we've seen this IP before
             if sender_ip in self.arp_table:
                 known_mac, _ = self.arp_table[sender_ip]
-                
+
                 # Different MAC for same IP - potential poisoning
                 if known_mac != sender_mac:
                     if self._should_alert(sender_ip, "ARP_POISON"):
                         msg = f"ARP poisoning: IP {sender_ip} claimed by MAC {sender_mac} (previously {known_mac})"
                         self._alert(ts, sender_mac, sender_ip, "ARP", msg)
-            
+
             # Update ARP table
             self.arp_table[sender_ip] = (sender_mac, ts)
 
@@ -238,10 +244,10 @@ class Detector:
         """Send alert to logger and GUI"""
         if self.logger:
             self.logger.alert(ts, src, dst, proto, message)
-        
+
         if self.gui_callback:
             tstr = time.strftime("%H:%M:%S", time.localtime(ts))
-            self.gui_callback((tstr, src, dst, f"🚨 ALERT: {message}"))
-        
+            self.gui_callback((tstr, src, dst, f"ALERT: {message}"))
+
         # Also print to console for debugging
-        print(f"[ALERT] {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))} | {src} → {dst} | {proto} | {message}")
+        print(f"[ALERT] {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))} | {src} -> {dst} | {proto} | {message}")

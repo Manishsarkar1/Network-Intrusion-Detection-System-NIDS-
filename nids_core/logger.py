@@ -1,4 +1,5 @@
 # logger.py
+import csv
 import sqlite3
 import threading
 from datetime import datetime
@@ -22,10 +23,12 @@ class Logger:
 
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         c = conn.cursor()
-        c.execute("""CREATE TABLE IF NOT EXISTS alerts (
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS alerts (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         ts REAL, src TEXT, dst TEXT, proto TEXT, alert TEXT
-                    )""")
+                    )"""
+        )
         conn.commit()
         conn.close()
 
@@ -55,3 +58,32 @@ class Logger:
         rows = c.fetchall()
         conn.close()
         return rows
+
+    def export_csv(self, output_path, limit=500):
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(
+            "SELECT ts, src, dst, proto, alert FROM alerts ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = c.fetchall()
+        conn.close()
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        with out.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "source", "destination", "protocol", "alert"])
+            for ts, src, dst, proto, alert in rows:
+                writer.writerow(
+                    [
+                        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+                        src,
+                        dst,
+                        proto,
+                        alert,
+                    ]
+                )
+
+        return len(rows)

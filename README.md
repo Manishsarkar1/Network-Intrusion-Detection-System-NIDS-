@@ -1,14 +1,29 @@
 # Network Intrusion Detection System (NIDS)
 
-A Python-based GUI network intrusion detection project using Scapy and CustomTkinter.
+A Python GUI NIDS project built with Scapy + CustomTkinter.
 
-## Organized Project Layout
+## What Was Enhanced
 
-- `main.py`: Root launcher for the NIDS application.
-- `nids_core/`: Core detection and GUI modules.
-- `scripts/`: Traffic/testing helper scripts.
-- `docs/`: Supporting documentation and notes.
-- `data/`: Runtime artifacts (SQLite alerts DB).
+- Live runtime stats in monitor window:
+  - Packet rate (packets/second)
+  - Session uptime timer
+- Capture filter presets:
+  - All, TCP, UDP, ICMP, ARP
+- Export alerts to CSV from the UI
+- Better runtime stability:
+  - Non-blocking sniff loop (`timeout=1`) for faster stop response
+  - Graceful detector thread shutdown on window close
+  - Auto fallback to unfiltered sniff if BPF filtering is unavailable
+- Cleaner repo hygiene:
+  - Ignore local virtualenv and generated runtime files
+
+## Project Layout
+
+- `main.py`: Root launcher
+- `nids_core/`: Core GUI + detector modules
+- `scripts/`: Test/helper scripts
+- `docs/`: Notes and extended docs
+- `data/`: Runtime database and exports
 
 ## Run
 
@@ -19,6 +34,6 @@ A Python-based GUI network intrusion detection project using Scapy and CustomTki
 
 ## Notes
 
-- Alerts are stored in `data/nids_alerts.db`.
-- Windows users need Npcap installed.
-- Testing helpers are in `scripts/test_ids.py` and `scripts/run_test_admin.bat`.
+- Alerts DB: `data/nids_alerts.db`
+- Exported CSV files default to `data/`
+- Windows users need Npcap installed
