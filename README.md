@@ -87,7 +87,7 @@ flowchart LR
 **1. Clone the repo**
 
 ```bash
-git clone https://github.com/your-username/nids.git
+git clone https://github.com/Manishsarkar1/Network-Intrusion-Detection-System-NIDS-
 cd nids
 ```
 
