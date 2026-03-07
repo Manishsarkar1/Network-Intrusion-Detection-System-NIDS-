@@ -10,6 +10,7 @@ from scapy.all import sniff
 
 from nids_core.detector import Detector
 from nids_core.logger import Logger
+from nids_core.settings import default_settings, load_settings, save_settings, validate_settings
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -21,6 +22,19 @@ FILTER_PRESETS = {
     "ICMP Only": "icmp",
     "ARP Only": "arp",
 }
+
+SETTING_FIELDS = [
+    ("syn_window", "SYN Window (sec)", float),
+    ("syn_ports_threshold", "SYN Ports Threshold", int),
+    ("flood_window", "Flood Window (sec)", float),
+    ("icmp_flood_threshold", "ICMP Flood Threshold", int),
+    ("udp_flood_threshold", "UDP Flood Threshold", int),
+    ("ssh_failed_login_window", "SSH Window (sec)", float),
+    ("ssh_failed_login_threshold", "SSH Attempts Threshold", int),
+    ("vnc_failed_login_window", "VNC Window (sec)", float),
+    ("vnc_failed_login_threshold", "VNC Attempts Threshold", int),
+    ("alert_cooldown_seconds", "Alert Cooldown (sec)", float),
+]
 
 
 class SnifferWindow(ctk.CTkToplevel):
@@ -37,10 +51,19 @@ class SnifferWindow(ctk.CTkToplevel):
         self._packet_count_last_tick = 0
         self.start_time = None
         self.sniff_thread = None
+        self.settings_window = None
+        self.settings_vars = {}
+        self.settings_status = None
+
+        self.detection_settings = load_settings()
 
         # Initialize IDS components
         self.logger = Logger()
-        self.detector = Detector(logger=self.logger, gui_callback=self.display_packet_or_alert)
+        self.detector = Detector(
+            logger=self.logger,
+            gui_callback=self.display_packet_or_alert,
+            settings=self.detection_settings,
+        )
         self.detector.start()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -111,6 +134,16 @@ class SnifferWindow(ctk.CTkToplevel):
             text_color="gray",
         )
         self.filter_help.grid(row=0, column=2, padx=(0, 12), pady=10, sticky="w")
+
+        self.settings_button = ctk.CTkButton(
+            options_frame,
+            text="Detection Settings",
+            command=self.open_settings_window,
+            width=170,
+            fg_color=("#5D4037", "#4E342E"),
+            hover_color=("#6D4C41", "#5D4037"),
+        )
+        self.settings_button.grid(row=0, column=3, padx=(0, 10), pady=10, sticky="e")
 
         # Main packet display frame
         display_frame = ctk.CTkFrame(self, corner_radius=10)
@@ -230,6 +263,15 @@ class SnifferWindow(ctk.CTkToplevel):
         self.packet_display.insert("end", f"[INFO] {message}\n", "INFO")
         self.packet_display.see("end")
 
+    def _settings_summary(self, settings):
+        return (
+            f"syn={settings['syn_ports_threshold']}@{settings['syn_window']}s, "
+            f"icmp={settings['icmp_flood_threshold']}, udp={settings['udp_flood_threshold']}, "
+            f"ssh={settings['ssh_failed_login_threshold']}@{settings['ssh_failed_login_window']}s, "
+            f"vnc={settings['vnc_failed_login_threshold']}@{settings['vnc_failed_login_window']}s, "
+            f"cooldown={settings['alert_cooldown_seconds']}s"
+        )
+
     def display_packet_or_alert(self, data):
         timestamp, src, dst, proto = data
 
@@ -276,9 +318,7 @@ class SnifferWindow(ctk.CTkToplevel):
         try:
             self._log_info(f"Starting capture on {self.name}")
             self._log_info(f"Interface: {self.iface}")
-            self._log_info(
-                "Active detections: SYN scan, ICMP flood, UDP flood, SSH brute force, VNC brute force, ARP poisoning"
-            )
+            self._log_info("Detection settings: " + self._settings_summary(self.detection_settings))
             if bpf_filter:
                 self._log_info(f"Capture filter: {bpf_filter}")
 
@@ -405,6 +445,98 @@ class SnifferWindow(ctk.CTkToplevel):
 
         exported = self.logger.export_csv(file_path, limit=2000)
         self._log_info(f"Exported {exported} alerts to {file_path}")
+
+    def open_settings_window(self):
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.focus()
+            return
+
+        self.settings_window = ctk.CTkToplevel(self)
+        self.settings_window.title("Detection Settings")
+        self.settings_window.geometry("560x640")
+        self.settings_window.transient(self)
+
+        frame = ctk.CTkFrame(self.settings_window)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(frame, text="Detection Thresholds", font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(10, 6), padx=14)
+        ctk.CTkLabel(
+            frame,
+            text="Apply updates instantly to the running detector. Save to persist across restarts.",
+            text_color="gray",
+            wraplength=500,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        fields_frame = ctk.CTkScrollableFrame(frame, height=420)
+        fields_frame.pack(fill="both", expand=True, padx=12, pady=10)
+        fields_frame.grid_columnconfigure(1, weight=1)
+
+        self.settings_vars = {}
+        for row_idx, (key, label, _cast) in enumerate(SETTING_FIELDS):
+            ctk.CTkLabel(fields_frame, text=label).grid(row=row_idx, column=0, sticky="w", padx=8, pady=8)
+            var = ctk.StringVar(value=str(self.detection_settings.get(key, default_settings()[key])))
+            entry = ctk.CTkEntry(fields_frame, textvariable=var)
+            entry.grid(row=row_idx, column=1, sticky="ew", padx=8, pady=8)
+            self.settings_vars[key] = var
+
+        self.settings_status = ctk.CTkLabel(frame, text="", text_color="gray")
+        self.settings_status.pack(anchor="w", padx=14, pady=(6, 2))
+
+        buttons = ctk.CTkFrame(frame, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(8, 12))
+        buttons.grid_columnconfigure(0, weight=1)
+        buttons.grid_columnconfigure(1, weight=1)
+        buttons.grid_columnconfigure(2, weight=1)
+
+        ctk.CTkButton(buttons, text="Apply Now", command=lambda: self.apply_settings(persist=False)).grid(
+            row=0, column=0, padx=6, sticky="ew"
+        )
+        ctk.CTkButton(buttons, text="Save and Apply", command=lambda: self.apply_settings(persist=True)).grid(
+            row=0, column=1, padx=6, sticky="ew"
+        )
+        ctk.CTkButton(buttons, text="Reset Defaults", command=self.reset_default_settings).grid(
+            row=0, column=2, padx=6, sticky="ew"
+        )
+
+    def _collect_settings_from_ui(self):
+        raw = {}
+        for key, _label, cast_type in SETTING_FIELDS:
+            text = self.settings_vars[key].get().strip()
+            if cast_type is int:
+                raw[key] = int(text)
+            else:
+                raw[key] = float(text)
+        return raw
+
+    def apply_settings(self, persist=False):
+        try:
+            raw = self._collect_settings_from_ui()
+            validated = validate_settings(raw)
+        except Exception as e:
+            if self.settings_status:
+                self.settings_status.configure(text=f"Invalid value: {e}", text_color="#FF5252")
+            return
+
+        self.detection_settings = validated
+        self.detector.update_settings(validated)
+
+        if persist:
+            save_settings(validated)
+            status_text = "Settings saved and applied."
+        else:
+            status_text = "Settings applied for current session."
+
+        if self.settings_status:
+            self.settings_status.configure(text=status_text, text_color="#81C784")
+
+        self._log_info(status_text + " " + self._settings_summary(validated))
+
+    def reset_default_settings(self):
+        defaults = default_settings()
+        for key, _label, _cast_type in SETTING_FIELDS:
+            self.settings_vars[key].set(str(defaults[key]))
+        self.apply_settings(persist=True)
 
     def on_close(self):
         self.sniffing = False

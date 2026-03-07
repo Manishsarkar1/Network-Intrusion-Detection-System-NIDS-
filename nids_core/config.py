@@ -1,33 +1,27 @@
-# config.py
-"""
-IDS Configuration File
-Adjust these values to tune detection sensitivity
-"""
+"""Core configuration constants and default detector settings."""
 
 from pathlib import Path
 
-# SYN Scan Detection
-SYN_WINDOW = 5.0  # Time window in seconds
-SYN_PORTS_THRESHOLD = 10  # Number of unique ports to trigger alert
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
-# Flood Detection
-FLOOD_WINDOW = 5.0  # Time window in seconds
-ICMP_FLOOD_THRESHOLD = 50  # ICMP packets threshold
-UDP_FLOOD_THRESHOLD = 200  # UDP packets threshold
+# Runtime artifacts
+DB_PATH = str(DATA_DIR / "nids_alerts.db")
+SETTINGS_PATH = str(DATA_DIR / "detection_settings.json")
 
-# SSH Brute Force Detection
+# Static protocol ports
 SSH_PORT = 22
-SSH_FAILED_LOGIN_WINDOW = 60.0  # Time window in seconds (1 minute)
-SSH_FAILED_LOGIN_THRESHOLD = 5  # Number of attempts to trigger alert
+VNC_PORTS = [5900, 5901, 5902, 5903]
 
-# VNC Brute Force Detection
-VNC_PORTS = [5900, 5901, 5902, 5903]  # Common VNC ports
-VNC_FAILED_LOGIN_WINDOW = 60.0  # Time window in seconds (1 minute)
-VNC_FAILED_LOGIN_THRESHOLD = 5  # Number of attempts to trigger alert
-
-# ARP Poisoning Detection
-ARP_WINDOW = 30.0  # Time window in seconds
-ARP_CONFLICT_THRESHOLD = 2  # Number of different MACs for same IP
-
-# Database
-DB_PATH = str(Path(__file__).resolve().parents[1] / "data" / "nids_alerts.db")
+# Default detection settings (editable in UI)
+DEFAULT_DETECTION_SETTINGS = {
+    "syn_window": 5.0,
+    "syn_ports_threshold": 10,
+    "flood_window": 5.0,
+    "icmp_flood_threshold": 50,
+    "udp_flood_threshold": 200,
+    "ssh_failed_login_window": 60.0,
+    "ssh_failed_login_threshold": 5,
+    "vnc_failed_login_window": 60.0,
+    "vnc_failed_login_threshold": 5,
+    "alert_cooldown_seconds": 10.0,
+}

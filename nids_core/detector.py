@@ -6,24 +6,8 @@ from collections import defaultdict, deque
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP
 
-# Import configuration
-try:
-    from nids_core.config import *
-except ImportError:
-    # Fallback defaults if config.py not found
-    SYN_WINDOW = 5.0
-    SYN_PORTS_THRESHOLD = 10
-    FLOOD_WINDOW = 5.0
-    ICMP_FLOOD_THRESHOLD = 50
-    UDP_FLOOD_THRESHOLD = 200
-    SSH_PORT = 22
-    SSH_FAILED_LOGIN_WINDOW = 60.0
-    SSH_FAILED_LOGIN_THRESHOLD = 5
-    VNC_PORTS = [5900, 5901, 5902, 5903]
-    VNC_FAILED_LOGIN_WINDOW = 60.0
-    VNC_FAILED_LOGIN_THRESHOLD = 5
-    ARP_WINDOW = 30.0
-    ARP_CONFLICT_THRESHOLD = 2
+from nids_core.config import SSH_PORT, VNC_PORTS
+from nids_core.settings import default_settings, validate_settings
 
 
 def proto_name(num):
@@ -31,11 +15,12 @@ def proto_name(num):
 
 
 class Detector:
-    def __init__(self, logger=None, gui_callback=None):
+    def __init__(self, logger=None, gui_callback=None, settings=None):
         self.logger = logger
         self.gui_callback = gui_callback
         self.queue = deque()
         self.lock = threading.Lock()
+        self.config_lock = threading.Lock()
         self.running = False
         self.thread = None
 
@@ -48,11 +33,13 @@ class Detector:
 
         # ARP poisoning detection
         self.arp_table = {}  # IP -> (MAC, last_seen_timestamp)
-        self.arp_conflicts = defaultdict(lambda: deque())
 
         # Alert cooldown to prevent spam
         self.alert_cooldown = {}  # (src, alert_type) -> last_alert_time
-        self.cooldown_period = 10.0  # seconds
+
+        self.settings = default_settings()
+        if settings:
+            self.update_settings(settings)
 
     def start(self):
         if self.running:
@@ -65,6 +52,15 @@ class Detector:
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=join_timeout)
+
+    def update_settings(self, settings):
+        validated = validate_settings(settings)
+        with self.config_lock:
+            self.settings = validated
+
+    def _cfg(self, key):
+        with self.config_lock:
+            return self.settings[key]
 
     def submit(self, pkt):
         with self.lock:
@@ -88,11 +84,9 @@ class Detector:
     def _analyze(self, pkt):
         ts = time.time()
 
-        # ARP Detection (Layer 2)
         if pkt.haslayer(ARP):
             self._detect_arp_poisoning(pkt, ts)
 
-        # IP-based analysis
         if not pkt.haslayer(IP):
             return
 
@@ -102,146 +96,150 @@ class Detector:
         pnum = ip.proto
         pname = proto_name(pnum)
 
-        # Notify GUI of normal traffic
         if self.gui_callback:
             tstr = time.strftime("%H:%M:%S", time.localtime(ts))
             self.gui_callback((tstr, src, dst, pname))
 
-        # TCP-based detections
         if pkt.haslayer(TCP):
             tcp = pkt.getlayer(TCP)
             self._detect_syn_scan(src, dst, tcp, ts)
             self._detect_ssh_bruteforce(src, dst, tcp, ts)
             self._detect_vnc_bruteforce(src, dst, tcp, ts)
 
-        # ICMP flood detection
         if pkt.haslayer(ICMP):
             self._detect_icmp_flood(src, dst, ts)
 
-        # UDP flood detection
         if pkt.haslayer(UDP):
             self._detect_udp_flood(src, dst, ts)
 
     def _should_alert(self, src, alert_type):
-        """Check if enough time has passed since last alert of this type"""
         key = (src, alert_type)
         now = time.time()
+        cooldown_period = self._cfg("alert_cooldown_seconds")
 
         if key in self.alert_cooldown:
-            if now - self.alert_cooldown[key] < self.cooldown_period:
+            if now - self.alert_cooldown[key] < cooldown_period:
                 return False
 
         self.alert_cooldown[key] = now
         return True
 
     def _detect_syn_scan(self, src, dst, tcp, ts):
-        """Detect SYN port scanning"""
         flags = int(tcp.flags)
-        if (flags & 0x02) and not (flags & 0x10):  # SYN without ACK
+        if (flags & 0x02) and not (flags & 0x10):
+            syn_window = self._cfg("syn_window")
+            syn_ports_threshold = self._cfg("syn_ports_threshold")
+
             dq = self.syn_history[src]
             dq.append((ts, tcp.dport))
 
-            # Expire old entries
-            while dq and (ts - dq[0][0]) > SYN_WINDOW:
+            while dq and (ts - dq[0][0]) > syn_window:
                 dq.popleft()
 
             unique_ports = {p for _, p in dq}
-            if len(unique_ports) >= SYN_PORTS_THRESHOLD:
+            if len(unique_ports) >= syn_ports_threshold:
                 if self._should_alert(src, "SYN_SCAN"):
-                    msg = f"SYN port scan: {len(unique_ports)} unique ports in {SYN_WINDOW}s"
+                    msg = f"SYN port scan: {len(unique_ports)} unique ports in {syn_window}s"
                     self._alert(ts, src, dst, "TCP", msg)
                 dq.clear()
 
     def _detect_icmp_flood(self, src, dst, ts):
-        """Detect ICMP flood (ping flood)"""
+        flood_window = self._cfg("flood_window")
+        icmp_flood_threshold = self._cfg("icmp_flood_threshold")
+
         dq = self.icmp_history[src]
         dq.append(ts)
 
-        while dq and (ts - dq[0]) > FLOOD_WINDOW:
+        while dq and (ts - dq[0]) > flood_window:
             dq.popleft()
 
-        if len(dq) >= ICMP_FLOOD_THRESHOLD:
+        if len(dq) >= icmp_flood_threshold:
             if self._should_alert(src, "ICMP_FLOOD"):
-                msg = f"ICMP flood: {len(dq)} packets in {FLOOD_WINDOW}s"
+                msg = f"ICMP flood: {len(dq)} packets in {flood_window}s"
                 self._alert(ts, src, dst, "ICMP", msg)
             dq.clear()
 
     def _detect_udp_flood(self, src, dst, ts):
-        """Detect UDP flood"""
+        flood_window = self._cfg("flood_window")
+        udp_flood_threshold = self._cfg("udp_flood_threshold")
+
         dq = self.udp_history[src]
         dq.append(ts)
 
-        while dq and (ts - dq[0]) > FLOOD_WINDOW:
+        while dq and (ts - dq[0]) > flood_window:
             dq.popleft()
 
-        if len(dq) >= UDP_FLOOD_THRESHOLD:
+        if len(dq) >= udp_flood_threshold:
             if self._should_alert(src, "UDP_FLOOD"):
-                msg = f"UDP flood: {len(dq)} packets in {FLOOD_WINDOW}s"
+                msg = f"UDP flood: {len(dq)} packets in {flood_window}s"
                 self._alert(ts, src, dst, "UDP", msg)
             dq.clear()
 
     def _detect_ssh_bruteforce(self, src, dst, tcp, ts):
-        """Detect SSH brute force attempts"""
         if tcp.dport == SSH_PORT:
             flags = int(tcp.flags)
-            # Track connection attempts (SYN packets)
-            if (flags & 0x02):  # SYN
+            if (flags & 0x02):
+                ssh_failed_login_window = self._cfg("ssh_failed_login_window")
+                ssh_failed_login_threshold = self._cfg("ssh_failed_login_threshold")
+
                 key = (src, dst)
                 dq = self.ssh_attempts[key]
                 dq.append(ts)
 
-                # Expire old attempts
-                while dq and (ts - dq[0]) > SSH_FAILED_LOGIN_WINDOW:
+                while dq and (ts - dq[0]) > ssh_failed_login_window:
                     dq.popleft()
 
-                if len(dq) >= SSH_FAILED_LOGIN_THRESHOLD:
+                if len(dq) >= ssh_failed_login_threshold:
                     if self._should_alert(src, "SSH_BRUTE"):
-                        msg = f"SSH brute force: {len(dq)} connection attempts in {SSH_FAILED_LOGIN_WINDOW}s"
+                        msg = (
+                            f"SSH brute force: {len(dq)} connection attempts "
+                            f"in {ssh_failed_login_window}s"
+                        )
                         self._alert(ts, src, dst, "SSH", msg)
                     dq.clear()
 
     def _detect_vnc_bruteforce(self, src, dst, tcp, ts):
-        """Detect VNC brute force attempts"""
         if tcp.dport in VNC_PORTS:
             flags = int(tcp.flags)
-            # Track connection attempts
-            if (flags & 0x02):  # SYN
+            if (flags & 0x02):
+                vnc_failed_login_window = self._cfg("vnc_failed_login_window")
+                vnc_failed_login_threshold = self._cfg("vnc_failed_login_threshold")
+
                 key = (src, dst, tcp.dport)
                 dq = self.vnc_attempts[key]
                 dq.append(ts)
 
-                # Expire old attempts
-                while dq and (ts - dq[0]) > VNC_FAILED_LOGIN_WINDOW:
+                while dq and (ts - dq[0]) > vnc_failed_login_window:
                     dq.popleft()
 
-                if len(dq) >= VNC_FAILED_LOGIN_THRESHOLD:
+                if len(dq) >= vnc_failed_login_threshold:
                     if self._should_alert(src, f"VNC_BRUTE_{tcp.dport}"):
-                        msg = f"VNC brute force: {len(dq)} attempts to port {tcp.dport} in {VNC_FAILED_LOGIN_WINDOW}s"
+                        msg = (
+                            f"VNC brute force: {len(dq)} attempts to port {tcp.dport} "
+                            f"in {vnc_failed_login_window}s"
+                        )
                         self._alert(ts, src, dst, "VNC", msg)
                     dq.clear()
 
     def _detect_arp_poisoning(self, pkt, ts):
-        """Detect ARP spoofing/poisoning attacks"""
-        if pkt.haslayer(ARP) and pkt[ARP].op == 2:  # ARP reply
+        if pkt.haslayer(ARP) and pkt[ARP].op == 2:
             arp = pkt[ARP]
             sender_ip = arp.psrc
             sender_mac = arp.hwsrc
 
-            # Check if we've seen this IP before
             if sender_ip in self.arp_table:
                 known_mac, _ = self.arp_table[sender_ip]
-
-                # Different MAC for same IP - potential poisoning
                 if known_mac != sender_mac:
                     if self._should_alert(sender_ip, "ARP_POISON"):
-                        msg = f"ARP poisoning: IP {sender_ip} claimed by MAC {sender_mac} (previously {known_mac})"
+                        msg = (
+                            f"ARP poisoning: IP {sender_ip} claimed by MAC {sender_mac} "
+                            f"(previously {known_mac})"
+                        )
                         self._alert(ts, sender_mac, sender_ip, "ARP", msg)
 
-            # Update ARP table
             self.arp_table[sender_ip] = (sender_mac, ts)
 
     def _alert(self, ts, src, dst, proto, message):
-        """Send alert to logger and GUI"""
         if self.logger:
             self.logger.alert(ts, src, dst, proto, message)
 
@@ -249,5 +247,7 @@ class Detector:
             tstr = time.strftime("%H:%M:%S", time.localtime(ts))
             self.gui_callback((tstr, src, dst, f"ALERT: {message}"))
 
-        # Also print to console for debugging
-        print(f"[ALERT] {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))} | {src} -> {dst} | {proto} | {message}")
+        print(
+            f"[ALERT] {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))} "
+            f"| {src} -> {dst} | {proto} | {message}"
+        )

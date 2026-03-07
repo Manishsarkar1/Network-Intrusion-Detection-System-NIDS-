@@ -14,8 +14,12 @@ A Python GUI NIDS project built with Scapy + CustomTkinter.
   - Non-blocking sniff loop (`timeout=1`) for faster stop response
   - Graceful detector thread shutdown on window close
   - Auto fallback to unfiltered sniff if BPF filtering is unavailable
-- Cleaner repo hygiene:
-  - Ignore local virtualenv and generated runtime files
+- Detection settings panel:
+  - Edit SYN/ICMP/UDP/SSH/VNC thresholds and windows
+  - Edit global alert cooldown
+  - `Apply Now` for live updates to running detector
+  - `Save and Apply` for persistence across restarts
+  - `Reset Defaults` for quick recovery
 
 ## Project Layout
 
@@ -35,5 +39,6 @@ A Python GUI NIDS project built with Scapy + CustomTkinter.
 ## Notes
 
 - Alerts DB: `data/nids_alerts.db`
+- User settings file: `data/detection_settings.json`
 - Exported CSV files default to `data/`
 - Windows users need Npcap installed
